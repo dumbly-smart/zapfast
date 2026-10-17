@@ -10,6 +10,7 @@ pub enum InputAction {
     SelectChat(usize),
     ScrollChats(isize),
     LoadMoreChats,
+    ToggleArchived,
     OpenSelected,
     OpenChat(String),
     Back,
@@ -35,6 +36,7 @@ pub struct SshState {
     pub pairing_qr: Option<String>,
     pub chats: Vec<Chat>,
     pub browse_mode: bool,
+    pub show_archived: bool,
     pub chats_exhausted: bool,
     pub selected_chat: usize,
     pub open_chat: Option<String>,
@@ -69,6 +71,7 @@ impl SshState {
             pairing_qr: None,
             chats: Vec::new(),
             browse_mode: false,
+            show_archived: false,
             chats_exhausted: true,
             selected_chat: 0,
             messages: Vec::new(),
@@ -106,6 +109,7 @@ impl SshState {
     pub fn initial_commands(&self) -> Vec<Command> {
         if self.browse_mode {
             return vec![Command::LoadChats {
+                archived: self.show_archived,
                 offset: 0,
                 limit: CHAT_PAGE_SIZE,
             }];
@@ -134,11 +138,21 @@ impl SshState {
                 self.link = LinkStatus::Pairing;
                 self.pairing_qr = Some(qr);
             }
-            Event::Chats { offset, chats } => {
+            Event::Chats {
+                archived,
+                offset,
+                chats,
+            } => {
+                if archived != self.show_archived {
+                    return;
+                }
                 self.chat_page_loading = false;
                 let chats: Vec<_> = chats
                     .into_iter()
-                    .filter(|chat| self.browse_mode || chat.id == self.from.id)
+                    .filter(|chat| {
+                        (!self.browse_mode || chat.archived == self.show_archived)
+                            && (self.browse_mode || chat.id == self.from.id)
+                    })
                     .collect();
                 if offset == 0 {
                     self.chats = chats;
@@ -153,6 +167,17 @@ impl SshState {
             }
             Event::ChatUpdated(chat) => {
                 if !self.browse_mode && chat.id != self.from.id {
+                    return;
+                }
+                if self.browse_mode && chat.archived != self.show_archived {
+                    if let Some(index) = self.chats.iter().position(|item| item.id == chat.id) {
+                        self.chats.remove(index);
+                        if index < self.selected_chat {
+                            self.selected_chat -= 1;
+                        }
+                        self.selected_chat =
+                            self.selected_chat.min(self.chats.len().saturating_sub(1));
+                    }
                     return;
                 }
                 let selected_id = self
@@ -275,7 +300,25 @@ impl SshState {
                 let offset = self.chats.len();
                 self.chat_page_loading = true;
                 vec![Command::LoadChats {
+                    archived: self.show_archived,
                     offset,
+                    limit: CHAT_PAGE_SIZE,
+                }]
+            }
+            InputAction::ToggleArchived => {
+                if !self.browse_mode || self.open_chat.is_some() {
+                    return Vec::new();
+                }
+                self.show_archived = !self.show_archived;
+                self.chats.clear();
+                self.selected_chat = 0;
+                self.search_query.clear();
+                self.search_results.clear();
+                self.chats_exhausted = false;
+                self.chat_page_loading = true;
+                vec![Command::LoadChats {
+                    archived: self.show_archived,
+                    offset: 0,
                     limit: CHAT_PAGE_SIZE,
                 }]
             }

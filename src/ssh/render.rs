@@ -53,7 +53,7 @@ pub fn draw(frame: &mut Frame, state: &SshState) {
     draw_header(frame, state, sections[0]);
     if state.browse_mode && state.open_chat.is_none() {
         draw_chat_browser(frame, state, sections[1]);
-        draw_browser_footer(frame, sections[2]);
+        draw_browser_footer(frame, state, sections[2]);
     } else {
         draw_conversation(frame, state, sections[1]);
         draw_footer(frame, state, sections[2]);
@@ -80,7 +80,14 @@ fn draw_header(frame: &mut Frame, state: &SshState, area: Rect) {
     if state.browse_mode && state.open_chat.is_none() {
         if area.height > 1 {
             lines.push(Line::from(vec![
-                Span::styled("  CHATS  ", Style::default().fg(ACCENT).bold()),
+                Span::styled(
+                    if state.show_archived {
+                        "  ARCHIVED  "
+                    } else {
+                        "  CHATS  "
+                    },
+                    Style::default().fg(ACCENT).bold(),
+                ),
                 Span::styled("Select a conversation", Style::default().fg(MUTED)),
             ]));
         }
@@ -230,10 +237,15 @@ fn draw_chat_browser(frame: &mut Frame, state: &SshState, area: Rect) {
             .collect()
     };
     let loaded = state.chats.len();
-    let title = if state.chats_exhausted {
-        format!(" CHATS  ·  {loaded} loaded ")
+    let folder = if state.show_archived {
+        "ARCHIVED"
     } else {
-        format!(" CHATS  ·  {loaded} loaded  ·  scroll for more ")
+        "CHATS"
+    };
+    let title = if state.chats_exhausted {
+        format!(" {folder}  ·  {loaded} loaded ")
+    } else {
+        format!(" {folder}  ·  {loaded} loaded  ·  scroll for more ")
     };
     frame.render_widget(
         Paragraph::new(lines).block(
@@ -247,7 +259,7 @@ fn draw_chat_browser(frame: &mut Frame, state: &SshState, area: Rect) {
     );
 }
 
-fn draw_browser_footer(frame: &mut Frame, area: Rect) {
+fn draw_browser_footer(frame: &mut Frame, state: &SshState, area: Rect) {
     if area.height == 0 {
         return;
     }
@@ -259,6 +271,15 @@ fn draw_browser_footer(frame: &mut Frame, area: Rect) {
             Span::styled("open   ", Style::default().fg(MUTED)),
             Span::styled("/ ", Style::default().fg(ACCENT).bold()),
             Span::styled("find   ", Style::default().fg(MUTED)),
+            Span::styled("a ", Style::default().fg(ACCENT).bold()),
+            Span::styled(
+                if state.show_archived {
+                    "chats   "
+                } else {
+                    "archived   "
+                },
+                Style::default().fg(MUTED),
+            ),
             Span::styled("wheel ", Style::default().fg(ACCENT).bold()),
             Span::styled("load more   ", Style::default().fg(MUTED)),
             Span::styled("q ", Style::default().fg(ACCENT).bold()),

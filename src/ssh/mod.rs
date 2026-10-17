@@ -345,6 +345,7 @@ mod tests {
             .unwrap();
         backend
             .send(Command::LoadChats {
+                archived: false,
                 offset: 0,
                 limit: 10,
             })

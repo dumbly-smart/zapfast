@@ -57,6 +57,7 @@ pub enum Event {
     Link(LinkStatus),
     PairingQr(String),
     Chats {
+        archived: bool,
         offset: usize,
         chats: Vec<Chat>,
     },
@@ -85,6 +86,7 @@ pub enum Event {
 
 pub enum Command {
     LoadChats {
+        archived: bool,
         offset: usize,
         limit: usize,
     },
@@ -293,8 +295,20 @@ async fn process_command(
     wake: &BackendWake,
 ) {
     match command {
-        Command::LoadChats { offset, limit } => match archive.chats_page(offset, limit) {
-            Ok(chats) => emit(events, wake, Event::Chats { offset, chats }),
+        Command::LoadChats {
+            archived,
+            offset,
+            limit,
+        } => match archive.chats_page(archived, offset, limit) {
+            Ok(chats) => emit(
+                events,
+                wake,
+                Event::Chats {
+                    archived,
+                    offset,
+                    chats,
+                },
+            ),
             Err(error) => emit(
                 events,
                 wake,

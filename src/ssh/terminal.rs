@@ -206,6 +206,9 @@ impl KeyInput {
                 vec![InputAction::BeginCompose]
             }
             KeyCode::Char('r') => vec![InputAction::QuoteSelected],
+            KeyCode::Char('a') if state.browse_mode && state.open_chat.is_none() => {
+                vec![InputAction::ToggleArchived]
+            }
             KeyCode::Up | KeyCode::Char('k') if state.open_chat.is_some() => {
                 let current = state
                     .selected_message

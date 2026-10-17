@@ -880,12 +880,16 @@ impl Archive {
     }
 
     /// Returns one newest-first slice of the chat list for paged clients.
-    pub fn chats_page(&self, offset: usize, limit: usize) -> Result<Vec<Chat>> {
+    pub fn chats_page(&self, archived: bool, offset: usize, limit: usize) -> Result<Vec<Chat>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN}
-             ORDER BY c.last_activity DESC, c.id ASC LIMIT ?1 OFFSET ?2"
+             WHERE c.archived = ?1
+             ORDER BY c.last_activity DESC, c.id ASC LIMIT ?2 OFFSET ?3"
         ))?;
-        let rows = statement.query_map(params![limit as i64, offset as i64], chat_from_row)?;
+        let rows = statement.query_map(
+            params![archived, limit as i64, offset as i64],
+            chat_from_row,
+        )?;
         rows.collect()
     }
 
