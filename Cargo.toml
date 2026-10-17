@@ -290,6 +290,15 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["NSMenu
 [[test]]
 name = "macos_menu"
 harness = false
+required-features = ["desktop"]
+
+[[test]]
+name = "presence"
+required-features = ["desktop"]
+
+[[test]]
+name = "update_flags"
+required-features = ["desktop"]
 
 [features]
 # Sample data, layout tests, and screenshots. Not used in release builds.
