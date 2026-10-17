@@ -3,6 +3,7 @@
 use crate::model::{Chat, Message, ReplyTarget};
 
 use super::backend::{Command, Event, LinkStatus};
+use super::selector::ResolvedChat;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputAction {
@@ -21,6 +22,8 @@ pub enum InputAction {
 
 #[derive(Debug)]
 pub struct SshState {
+    pub to: ResolvedChat,
+    pub from: ResolvedChat,
     pub link: LinkStatus,
     pub pairing_qr: Option<String>,
     pub chats: Vec<Chat>,
@@ -42,13 +45,15 @@ pub struct SshState {
 }
 
 impl SshState {
-    pub fn new() -> Self {
+    pub fn new(to: ResolvedChat, from: ResolvedChat) -> Self {
         Self {
+            open_chat: Some(from.id.clone()),
+            to,
+            from,
             link: LinkStatus::Starting,
             pairing_qr: None,
             chats: Vec::new(),
             selected_chat: 0,
-            open_chat: None,
             messages: Vec::new(),
             selected_message: None,
             draft: String::new(),
@@ -64,6 +69,10 @@ impl SshState {
         }
     }
 
+    pub fn initial_commands(&self) -> Vec<Command> {
+        vec![Command::LoadChat { chat: self.from.id.clone(), before: None, limit: 50 }, Command::MarkRead { chat: self.from.id.clone() }]
+    }
+
     pub fn apply(&mut self, event: Event) {
         match event {
             Event::Link(link) => {
@@ -77,12 +86,7 @@ impl SshState {
                 self.pairing_qr = Some(qr);
             }
             Event::Chats(chats) => {
-                let selected = self.selected_chat_id().map(str::to_owned);
-                self.chats = chats;
-                self.selected_chat = selected
-                    .as_deref()
-                    .and_then(|id| self.chats.iter().position(|chat| chat.id == id))
-                    .unwrap_or_else(|| self.selected_chat.min(self.chats.len().saturating_sub(1)));
+                self.chats = chats.into_iter().filter(|chat| chat.id == self.from.id).collect();
             }
             Event::ChatMessages {
                 chat,
@@ -123,7 +127,7 @@ impl SshState {
             }
             Event::SearchResults { query, messages } => {
                 if query == self.search_query {
-                    self.search_results = messages;
+                    self.search_results = messages.into_iter().filter(|m| m.chat == self.from.id).collect();
                 }
             }
             Event::Message(message) => {
@@ -145,7 +149,7 @@ impl SshState {
                 ..
             } => {
                 if result.is_ok() {
-                    if self.open_chat.as_deref() == Some(&chat) && self.draft == text {
+                    if self.to.id == chat && self.draft == text {
                         self.draft.clear();
                     }
                     if self.quoting == quoting {
@@ -232,13 +236,12 @@ impl SshState {
                 Vec::new()
             }
             InputAction::Send => {
-                let (Some(chat), false) = (self.open_chat.clone(), self.draft.trim().is_empty())
-                else {
+                if self.draft.trim().is_empty() {
                     return Vec::new();
-                };
+                }
                 self.refusal = None;
                 vec![Command::SendText {
-                    chat,
+                    chat: self.to.id.clone(),
                     text: self.draft.clone(),
                     quoting: self.quoting.clone(),
                 }]
@@ -269,6 +272,7 @@ impl SshState {
     }
 
     fn open(&mut self, chat: String) -> Vec<Command> {
+        if chat != self.from.id { return Vec::new(); }
         self.open_chat = Some(chat.clone());
         self.messages.clear();
         self.selected_message = None;
@@ -305,7 +309,8 @@ impl SshState {
 
 impl Default for SshState {
     fn default() -> Self {
-        Self::new()
+        let placeholder = ResolvedChat { id: String::new(), name: String::new(), is_group: false };
+        Self::new(placeholder.clone(), placeholder)
     }
 }
 
@@ -315,6 +320,14 @@ mod tests {
     use crate::archive::Archive;
     use crate::model::{Content, Delivery, Message};
     use crate::ssh::backend::{Command, Event, LinkStatus};
+    use crate::ssh::selector::ResolvedChat;
+
+    fn direct(to: &str, from: &str) -> SshState {
+        SshState::new(
+            ResolvedChat { id: to.into(), name: format!("name-{to}"), is_group: to.ends_with("@g.us") },
+            ResolvedChat { id: from.into(), name: format!("name-{from}"), is_group: from.ends_with("@g.us") },
+        )
+    }
 
     fn chat(id: &str, name: &str) -> crate::model::Chat {
         let archive = Archive::in_memory().unwrap();
@@ -347,9 +360,8 @@ mod tests {
     #[test]
     fn open_chat_loads_and_marks_read() {
         let id = "1@s.whatsapp.net";
-        let mut state = SshState::new();
-        state.chats = vec![chat(id, "Ada")];
-        let commands = state.act(InputAction::OpenChat(id.into()));
+        let state = direct("2@s.whatsapp.net", id);
+        let commands = state.initial_commands();
         assert!(commands.iter().any(|command| matches!(command,
             Command::LoadChat { chat, before: None, .. } if chat == id)));
         assert!(
@@ -362,8 +374,7 @@ mod tests {
     #[test]
     fn older_pages_prepend_once_and_stop_at_complete() {
         let id = "1@s.whatsapp.net";
-        let mut state = SshState::new();
-        state.open_chat = Some(id.into());
+        let mut state = direct(id, id);
         state.messages = vec![message(id, "new", 200, false)];
         let first = state.act(InputAction::OlderPage);
         assert!(
@@ -389,7 +400,7 @@ mod tests {
 
     #[test]
     fn search_filters_titles_and_ignores_stale_results() {
-        let mut state = SshState::new();
+        let mut state = direct("1@s.whatsapp.net", "1@s.whatsapp.net");
         state.chats = vec![
             chat("1@s.whatsapp.net", "Ada"),
             chat("2@s.whatsapp.net", "Bob"),
@@ -416,7 +427,7 @@ mod tests {
     #[test]
     fn quoted_send_uses_selected_reply_target() {
         let id = "1@s.whatsapp.net";
-        let mut state = SshState::new();
+        let mut state = direct("1@s.whatsapp.net", "1@s.whatsapp.net");
         state.open_chat = Some(id.into());
         state.messages = vec![message(id, "source", 1, false)];
         state.act(InputAction::SelectMessage(0));
@@ -432,8 +443,7 @@ mod tests {
     #[test]
     fn refused_send_keeps_draft_and_reason() {
         let id = "1@s.whatsapp.net";
-        let mut state = SshState::new();
-        state.open_chat = Some(id.into());
+        let mut state = direct(id, id);
         state.act(InputAction::Compose("keep me".into()));
         state.apply(Event::SendFinished {
             id: String::new(),
@@ -449,8 +459,7 @@ mod tests {
     #[test]
     fn incoming_message_only_changes_the_open_chat() {
         let open = "1@s.whatsapp.net";
-        let mut state = SshState::new();
-        state.open_chat = Some(open.into());
+        let mut state = direct(open, open);
         state.apply(Event::Message(message(
             "2@s.whatsapp.net",
             "other",
@@ -471,8 +480,30 @@ mod tests {
 
     #[test]
     fn link_status_is_visible_to_the_terminal() {
-        let mut state = SshState::new();
+        let mut state = SshState::default();
         state.apply(Event::Link(LinkStatus::Connected));
         assert!(matches!(state.link, LinkStatus::Connected));
+    }
+
+    #[test]
+    fn group_transcript_accepts_each_member_but_no_other_chat() {
+        let group = "team@g.us";
+        let mut state = direct("target@s.whatsapp.net", group);
+        state.apply(Event::Message(message(group, "from-a", 2, false)));
+        let mut member = message(group, "from-b", 3, false);
+        member.sender = "member-2@s.whatsapp.net".into();
+        state.apply(Event::Message(member));
+        state.apply(Event::Message(message("other@g.us", "outside", 4, false)));
+        assert_eq!(state.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["from-b", "from-a"]);
+        assert!(matches!(state.act(InputAction::OlderPage).as_slice(), [Command::LoadChat { chat, .. }] if chat == group));
+        state.act(InputAction::Compose("group reply".into()));
+        assert!(matches!(state.act(InputAction::Send).as_slice(), [Command::SendText { chat, .. }] if chat == "target@s.whatsapp.net"));
+    }
+
+    #[test]
+    fn initial_load_and_read_are_only_for_from() {
+        let state = direct("to@s.whatsapp.net", "from@g.us");
+        let commands = state.initial_commands();
+        assert!(matches!(commands.as_slice(), [Command::LoadChat { chat, before: None, .. }, Command::MarkRead { chat: marked }] if chat == "from@g.us" && marked == chat));
     }
 }

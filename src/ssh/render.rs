@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
 use super::{
@@ -31,7 +31,7 @@ pub fn draw(frame: &mut Frame, state: &SshState) {
     );
     frame.render_widget(Paragraph::new(status), sections[0]);
 
-    draw_chats(frame, state, sections[1]);
+    draw_conversation(frame, state, sections[1]);
 
     let footer = if let Some(reason) = &state.refusal {
         format!(" Send refused: {reason}\n{}", state.draft)
@@ -77,42 +77,7 @@ fn draw_qr(frame: &mut Frame, payload: &str, area: Rect) {
     }
 }
 
-fn draw_chats(frame: &mut Frame, state: &SshState, area: Rect) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(32), Constraint::Percentage(68)])
-        .split(area);
-    let chats = state.visible_chats();
-    let items = chats
-        .iter()
-        .map(|chat| {
-            let title = if chat.name.is_empty() {
-                &chat.id
-            } else {
-                &chat.name
-            };
-            ListItem::new(format!(
-                "{title}\n{}",
-                chat.last.as_ref().map_or("", |last| last.summary.as_str())
-            ))
-        })
-        .collect::<Vec<_>>();
-    let mut selected = ListState::default();
-    if !items.is_empty() {
-        selected.select(Some(state.selected_chat.min(items.len() - 1)));
-    }
-    frame.render_stateful_widget(
-        List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Chats"))
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        columns[0],
-        &mut selected,
-    );
-
+fn draw_conversation(frame: &mut Frame, state: &SshState, area: Rect) {
     let transcript = if state.search_query.is_empty() {
         &state.messages
     } else {
@@ -129,12 +94,12 @@ fn draw_chats(frame: &mut Frame, state: &SshState, area: Rect) {
             ])
         })
         .collect::<Vec<_>>();
-    let title = state.open_chat.as_deref().unwrap_or("Select a chat");
+    let title = format!("{} (from) · {} (to)", state.from.name, state.to.name);
     frame.render_widget(
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .block(Block::default().borders(Borders::ALL).title(title)),
-        columns[1],
+        area,
     );
 }
 
@@ -143,7 +108,7 @@ mod tests {
     use super::*;
     use crate::{
         model::{Chat, Content, Delivery, Message},
-        ssh::{backend::LinkStatus, state::SshState},
+        ssh::{backend::LinkStatus, selector::ResolvedChat, state::SshState},
     };
     use ratatui::{Terminal, backend::TestBackend};
 
@@ -162,7 +127,7 @@ mod tests {
 
     #[test]
     fn small_terminal_hides_qr_payload() {
-        let mut state = SshState::new();
+        let mut state = SshState::default();
         state.pairing_qr = Some("PRIVATE_PAIRING_FIXTURE".into());
         let screen = render(&state, 30, 8);
         assert!(screen.contains("Resize terminal"));
@@ -171,7 +136,7 @@ mod tests {
 
     #[test]
     fn pairing_qr_uses_the_full_screen_on_a_typical_terminal() {
-        let mut state = SshState::new();
+        let mut state = SshState::default();
         state.pairing_qr = Some("fixture payload".into());
         let screen = render(&state, 80, 24);
         assert!(!screen.contains("Resize terminal"));
@@ -180,7 +145,7 @@ mod tests {
 
     #[test]
     fn unsupported_message_has_placeholder() {
-        let mut state = SshState::new();
+        let mut state = SshState::default();
         state.link = LinkStatus::Connected;
         state.open_chat = Some("chat".into());
         state.chats.push(Chat::new("chat".into(), "chat".into()));
@@ -210,7 +175,7 @@ mod tests {
 
     #[test]
     fn resize_keeps_selected_chat_id() {
-        let mut state = SshState::new();
+        let mut state = SshState::default();
         state.chats = vec![
             Chat::new("one".into(), "one".into()),
             Chat::new("two".into(), "two".into()),
@@ -219,5 +184,17 @@ mod tests {
         let _ = render(&state, 80, 20);
         let _ = render(&state, 40, 10);
         assert_eq!(state.visible_chats()[state.selected_chat].id, "two");
+    }
+
+    #[test]
+    fn direct_mode_header_shows_both_selected_conversations_without_chat_list() {
+        let state = SshState::new(
+            ResolvedChat { id: "to@s.whatsapp.net".into(), name: "Send Target".into(), is_group: false },
+            ResolvedChat { id: "team@g.us".into(), name: "Design Team".into(), is_group: true },
+        );
+        let screen = render(&state, 100, 24);
+        assert!(screen.contains("Design Team (from)"));
+        assert!(screen.contains("Send Target (to)"));
+        assert!(!screen.contains("Chats"));
     }
 }

@@ -234,7 +234,7 @@ mod tests {
     #[test]
     fn keys_enter_compose_and_search_modes() {
         let mut input = KeyInput::default();
-        let state = SshState::new();
+        let state = SshState::default();
         let key = |code| KeyEvent {
             code,
             modifiers: KeyModifiers::NONE,

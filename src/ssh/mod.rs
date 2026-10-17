@@ -172,15 +172,15 @@ fn drive_session<B: SessionBackend>(
     dirs: crate::paths::AccountDirs,
     wake: BackendWake,
     key: Zeroizing<[u8; 32]>,
-    _to: selector::ResolvedChat,
-    _from: selector::ResolvedChat,
+    to: selector::ResolvedChat,
+    from: selector::ResolvedChat,
     wake_rx: &mpsc::Receiver<Wake>,
     terminal: &mut TerminalGuard,
 ) -> anyhow::Result<()> {
     let outcome = with_backend_shutdown(backend, |backend| {
         backend.start(dirs, wake, key)?;
-        backend.send(Command::LoadChats)?;
-        let mut state = SshState::new();
+        let mut state = SshState::new(to, from);
+        for command in state.initial_commands() { backend.send(command)?; }
         let mut input = KeyInput::default();
         terminal.draw(&state)?;
         loop {
