@@ -2472,6 +2472,7 @@ pub(crate) mod tests {
         assert_eq!(std::fs::read(path).unwrap(), before);
     }
 
+    #[cfg(feature = "desktop")]
     pub(crate) fn set_derived_update_failure(archive: &super::Archive, fail: bool) {
         archive.connection.execute_batch(if fail {
             "CREATE TRIGGER reject_derived_update BEFORE UPDATE OF content ON messages BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;"
