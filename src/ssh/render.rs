@@ -87,7 +87,11 @@ fn draw_conversation(frame: &mut Frame, state: &SshState, area: Rect) {
         .iter()
         .rev()
         .map(|message| {
-            let who = if message.from_me { "You" } else { "Them" };
+            let who = if message.from_me {
+                "You"
+            } else {
+                message.sender_name.as_deref().unwrap_or("Them")
+            };
             Line::from(vec![
                 Span::styled(format!("{who}: "), Style::default().fg(Color::Yellow)),
                 Span::raw(message.content.summary()),
@@ -189,8 +193,16 @@ mod tests {
     #[test]
     fn direct_mode_header_shows_both_selected_conversations_without_chat_list() {
         let state = SshState::new(
-            ResolvedChat { id: "to@s.whatsapp.net".into(), name: "Send Target".into(), is_group: false },
-            ResolvedChat { id: "team@g.us".into(), name: "Design Team".into(), is_group: true },
+            ResolvedChat {
+                id: "to@s.whatsapp.net".into(),
+                name: "Send Target".into(),
+                is_group: false,
+            },
+            ResolvedChat {
+                id: "team@g.us".into(),
+                name: "Design Team".into(),
+                is_group: true,
+            },
         );
         let screen = render(&state, 100, 24);
         assert!(screen.contains("Design Team (from)"));

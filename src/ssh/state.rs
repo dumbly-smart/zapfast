@@ -70,7 +70,16 @@ impl SshState {
     }
 
     pub fn initial_commands(&self) -> Vec<Command> {
-        vec![Command::LoadChat { chat: self.from.id.clone(), before: None, limit: 50 }, Command::MarkRead { chat: self.from.id.clone() }]
+        vec![
+            Command::LoadChat {
+                chat: self.from.id.clone(),
+                before: None,
+                limit: 50,
+            },
+            Command::MarkRead {
+                chat: self.from.id.clone(),
+            },
+        ]
     }
 
     pub fn apply(&mut self, event: Event) {
@@ -86,7 +95,10 @@ impl SshState {
                 self.pairing_qr = Some(qr);
             }
             Event::Chats(chats) => {
-                self.chats = chats.into_iter().filter(|chat| chat.id == self.from.id).collect();
+                self.chats = chats
+                    .into_iter()
+                    .filter(|chat| chat.id == self.from.id)
+                    .collect();
             }
             Event::ChatMessages {
                 chat,
@@ -127,7 +139,10 @@ impl SshState {
             }
             Event::SearchResults { query, messages } => {
                 if query == self.search_query {
-                    self.search_results = messages.into_iter().filter(|m| m.chat == self.from.id).collect();
+                    self.search_results = messages
+                        .into_iter()
+                        .filter(|m| m.chat == self.from.id)
+                        .collect();
                 }
             }
             Event::Message(message) => {
@@ -219,7 +234,10 @@ impl SshState {
                 if query.trim().is_empty() {
                     Vec::new()
                 } else {
-                    vec![Command::Search { query }]
+                    vec![Command::Search {
+                        chat: self.from.id.clone(),
+                        query,
+                    }]
                 }
             }
             InputAction::Compose(text) => {
@@ -232,7 +250,9 @@ impl SshState {
                 Vec::new()
             }
             InputAction::QuoteSelected => {
-                self.quoting = self.selected_message.as_deref().map(ReplyTarget::from);
+                self.quoting = (self.to.id == self.from.id)
+                    .then(|| self.selected_message.as_deref().map(ReplyTarget::from))
+                    .flatten();
                 Vec::new()
             }
             InputAction::Send => {
@@ -272,7 +292,9 @@ impl SshState {
     }
 
     fn open(&mut self, chat: String) -> Vec<Command> {
-        if chat != self.from.id { return Vec::new(); }
+        if chat != self.from.id {
+            return Vec::new();
+        }
         self.open_chat = Some(chat.clone());
         self.messages.clear();
         self.selected_message = None;
@@ -309,7 +331,11 @@ impl SshState {
 
 impl Default for SshState {
     fn default() -> Self {
-        let placeholder = ResolvedChat { id: String::new(), name: String::new(), is_group: false };
+        let placeholder = ResolvedChat {
+            id: String::new(),
+            name: String::new(),
+            is_group: false,
+        };
         Self::new(placeholder.clone(), placeholder)
     }
 }
@@ -324,8 +350,16 @@ mod tests {
 
     fn direct(to: &str, from: &str) -> SshState {
         SshState::new(
-            ResolvedChat { id: to.into(), name: format!("name-{to}"), is_group: to.ends_with("@g.us") },
-            ResolvedChat { id: from.into(), name: format!("name-{from}"), is_group: from.ends_with("@g.us") },
+            ResolvedChat {
+                id: to.into(),
+                name: format!("name-{to}"),
+                is_group: to.ends_with("@g.us"),
+            },
+            ResolvedChat {
+                id: from.into(),
+                name: format!("name-{from}"),
+                is_group: from.ends_with("@g.us"),
+            },
         )
     }
 
@@ -407,7 +441,7 @@ mod tests {
         ];
         assert!(matches!(
             state.act(InputAction::Search("ada".into())).as_slice(),
-            [Command::Search { query }] if query == "ada"
+            [Command::Search { chat, query }] if chat == "1@s.whatsapp.net" && query == "ada"
         ));
         assert_eq!(
             state
@@ -494,16 +528,50 @@ mod tests {
         member.sender = "member-2@s.whatsapp.net".into();
         state.apply(Event::Message(member));
         state.apply(Event::Message(message("other@g.us", "outside", 4, false)));
-        assert_eq!(state.messages.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["from-b", "from-a"]);
-        assert!(matches!(state.act(InputAction::OlderPage).as_slice(), [Command::LoadChat { chat, .. }] if chat == group));
+        assert_eq!(
+            state
+                .messages
+                .iter()
+                .map(|m| m.id.as_str())
+                .collect::<Vec<_>>(),
+            ["from-b", "from-a"]
+        );
+        assert!(
+            matches!(state.act(InputAction::OlderPage).as_slice(), [Command::LoadChat { chat, .. }] if chat == group)
+        );
         state.act(InputAction::Compose("group reply".into()));
-        assert!(matches!(state.act(InputAction::Send).as_slice(), [Command::SendText { chat, .. }] if chat == "target@s.whatsapp.net"));
+        assert!(
+            matches!(state.act(InputAction::Send).as_slice(), [Command::SendText { chat, .. }] if chat == "target@s.whatsapp.net")
+        );
     }
 
     #[test]
     fn initial_load_and_read_are_only_for_from() {
         let state = direct("to@s.whatsapp.net", "from@g.us");
         let commands = state.initial_commands();
-        assert!(matches!(commands.as_slice(), [Command::LoadChat { chat, before: None, .. }, Command::MarkRead { chat: marked }] if chat == "from@g.us" && marked == chat));
+        assert!(
+            matches!(commands.as_slice(), [Command::LoadChat { chat, before: None, .. }, Command::MarkRead { chat: marked }] if chat == "from@g.us" && marked == chat)
+        );
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, Command::FetchOlder { .. }))
+        );
+    }
+
+    #[test]
+    fn phone_history_is_requested_only_after_explicit_older_action() {
+        let id = "from@g.us";
+        let mut state = direct("to@s.whatsapp.net", id);
+        state.messages = vec![message(id, "oldest", 1, false)];
+        state.apply(Event::ChatMessages {
+            chat: id.into(),
+            before: Some((1, "oldest".into())),
+            messages: vec![],
+        });
+        let commands = state.act(InputAction::OlderPage);
+        assert!(
+            matches!(commands.as_slice(), [Command::FetchOlder { chat, id: message, .. }] if chat == id && message == "oldest")
+        );
     }
 }

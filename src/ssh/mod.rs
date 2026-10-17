@@ -16,7 +16,7 @@ use crossterm::event::{self, Event as CrosstermEvent, KeyEventKind};
 use zeroize::Zeroizing;
 
 use self::{
-    backend::{ArchiveUnlock, Backend, BackendWake, Command, Event},
+    backend::{ArchiveUnlock, Backend, BackendWake, Command, DirectFilter, Event},
     profile::Profile,
     state::SshState,
     terminal::{KeyInput, TerminalGuard},
@@ -27,8 +27,8 @@ pub mod backend;
 pub mod profile;
 pub mod qr;
 pub mod render;
-pub mod state;
 pub mod selector;
+pub mod state;
 pub mod terminal;
 pub mod vault;
 
@@ -46,6 +46,7 @@ trait SessionBackend {
         dirs: crate::paths::AccountDirs,
         wake: BackendWake,
         key: Zeroizing<[u8; 32]>,
+        filter: DirectFilter,
     ) -> anyhow::Result<()>;
     fn send(&mut self, command: Command) -> anyhow::Result<()>;
     fn poll(&mut self) -> Vec<Event>;
@@ -60,11 +61,13 @@ impl SessionBackend for LiveBackend {
         dirs: crate::paths::AccountDirs,
         wake: BackendWake,
         key: Zeroizing<[u8; 32]>,
+        filter: DirectFilter,
     ) -> anyhow::Result<()> {
         self.0 = Some(Backend::spawn_headless(
             dirs,
             wake,
             ArchiveUnlock::Supplied(key),
+            filter,
         ));
         Ok(())
     }
@@ -91,7 +94,12 @@ impl SessionBackend for LiveBackend {
 }
 
 /// Runs one foreground terminal session. The profile lock outlives backend shutdown.
-pub fn run(profile: Profile, passphrase: Zeroizing<String>, to: selector::ChatSelector, from: selector::ChatSelector) -> anyhow::Result<()> {
+pub fn run(
+    profile: Profile,
+    passphrase: Zeroizing<String>,
+    to: selector::ChatSelector,
+    from: selector::ChatSelector,
+) -> anyhow::Result<()> {
     let _lock = profile.acquire()?;
     let dirs = profile.account_dirs();
     let key = Vault::open_or_create(
@@ -116,7 +124,16 @@ pub fn run(profile: Profile, passphrase: Zeroizing<String>, to: selector::ChatSe
         let _ = wake_tx.send(Wake::Backend);
     });
     let mut backend = LiveBackend(None);
-    let result = drive_session(&mut backend, dirs, wake, key, to, from, &wake_rx, &mut terminal);
+    let result = drive_session(
+        &mut backend,
+        dirs,
+        wake,
+        key,
+        to,
+        from,
+        &wake_rx,
+        &mut terminal,
+    );
     stopping.store(true, Ordering::SeqCst);
     let _ = input_thread.join();
     for id in signal_ids {
@@ -178,9 +195,15 @@ fn drive_session<B: SessionBackend>(
     terminal: &mut TerminalGuard,
 ) -> anyhow::Result<()> {
     let outcome = with_backend_shutdown(backend, |backend| {
-        backend.start(dirs, wake, key)?;
         let mut state = SshState::new(to, from);
-        for command in state.initial_commands() { backend.send(command)?; }
+        let filter = DirectFilter {
+            to: state.to.id.clone(),
+            from: state.from.id.clone(),
+        };
+        backend.start(dirs, wake, key, filter)?;
+        for command in state.initial_commands() {
+            backend.send(command)?;
+        }
         let mut input = KeyInput::default();
         terminal.draw(&state)?;
         loop {
@@ -253,6 +276,7 @@ mod tests {
             _: crate::paths::AccountDirs,
             _: BackendWake,
             _: Zeroizing<[u8; 32]>,
+            _: DirectFilter,
         ) -> anyhow::Result<()> {
             self.starts.set(self.starts.get() + 1);
             Ok(())
@@ -284,7 +308,15 @@ mod tests {
             wakes: vec![],
         };
         backend
-            .start(dirs, BackendWake::new(|| {}), Zeroizing::new([0; 32]))
+            .start(
+                dirs,
+                BackendWake::new(|| {}),
+                Zeroizing::new([0; 32]),
+                DirectFilter {
+                    to: "to".into(),
+                    from: "from".into(),
+                },
+            )
             .unwrap();
         backend.send(Command::LoadChats).unwrap();
         assert_eq!(backend.starts.get(), 1);

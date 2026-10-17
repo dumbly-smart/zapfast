@@ -23,6 +23,12 @@ use crate::paths::AccountDirs;
 #[derive(Clone)]
 pub struct BackendWake(Arc<dyn Fn() + Send + Sync>);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectFilter {
+    pub to: String,
+    pub from: String,
+}
+
 impl BackendWake {
     pub fn new(f: impl Fn() + Send + Sync + 'static) -> Self {
         Self(Arc::new(f))
@@ -87,6 +93,7 @@ pub enum Command {
         timestamp: i64,
     },
     Search {
+        chat: String,
         query: String,
     },
     SendText {
@@ -107,7 +114,12 @@ pub struct Backend {
 }
 
 impl Backend {
-    pub fn spawn_headless(dirs: AccountDirs, wake: BackendWake, unlock: ArchiveUnlock) -> Self {
+    pub fn spawn_headless(
+        dirs: AccountDirs,
+        wake: BackendWake,
+        unlock: ArchiveUnlock,
+        filter: DirectFilter,
+    ) -> Self {
         let (command_tx, command_rx) = tokio_mpsc::unbounded_channel();
         let (event_tx, event_rx) = mpsc::channel();
         let thread = thread::Builder::new()
@@ -127,7 +139,7 @@ impl Backend {
                         return;
                     }
                 };
-                runtime.block_on(run(dirs, command_rx, event_tx, wake, unlock));
+                runtime.block_on(run(dirs, command_rx, event_tx, wake, unlock, filter));
             })
             .expect("could not start ZapFast SSH backend thread");
         Self {
@@ -180,6 +192,7 @@ async fn run(
     events: mpsc::Sender<Event>,
     wake: BackendWake,
     unlock: ArchiveUnlock,
+    filter: DirectFilter,
 ) {
     emit(&events, &wake, Event::Link(LinkStatus::Starting));
     if let Err(error) = dirs.ensure() {
@@ -261,10 +274,10 @@ async fn run(
         tokio::select! {
             command = commands.recv() => match command {
                 Some(Command::Shutdown) | None => stop = true,
-                Some(command) => process_command(command, &archive, &client, &events, &wake).await,
+                Some(command) => process_command(command, &filter, &archive, &client, &events, &wake).await,
             },
             event = wa_events.recv() => match event {
-                Ok(event) => process_wa_event(&event, &archive, &events, &wake),
+                Ok(event) => process_wa_event(&event, &filter, &archive, &events, &wake),
                 Err(_) => stop = true,
             }
         }
@@ -275,14 +288,15 @@ async fn run(
 
 async fn process_command(
     command: Command,
+    filter: &DirectFilter,
     archive: &Archive,
     client: &Arc<whatsapp_rust::Client>,
     events: &mpsc::Sender<Event>,
     wake: &BackendWake,
 ) {
     match command {
-        Command::LoadChats => match archive.chats() {
-            Ok(chats) => emit(events, wake, Event::Chats(chats)),
+        Command::LoadChats => match archive.chat(&filter.from) {
+            Ok(chat) => emit(events, wake, Event::Chats(chat.into_iter().collect())),
             Err(error) => emit(
                 events,
                 wake,
@@ -300,7 +314,7 @@ async fn process_command(
                 .map(|(timestamp, id)| (*timestamp, id.as_str())),
             limit,
         ) {
-            Ok(messages) => emit(
+            Ok(messages) if chat == filter.from => emit(
                 events,
                 wake,
                 Event::ChatMessages {
@@ -309,6 +323,7 @@ async fn process_command(
                     messages,
                 },
             ),
+            Ok(_) => {}
             Err(error) => emit(
                 events,
                 wake,
@@ -320,7 +335,7 @@ async fn process_command(
             id,
             from_me,
             timestamp,
-        } => match chat.parse::<Jid>() {
+        } if chat == filter.from => match chat.parse::<Jid>() {
             Ok(jid) => {
                 if let Err(error) = client
                     .fetch_message_history(&jid, &id, from_me, timestamp, 50)
@@ -341,15 +356,17 @@ async fn process_command(
                 Event::Link(LinkStatus::Error(error.to_string())),
             ),
         },
-        Command::Search { query } => match archive.search_messages(&query, 100) {
-            Ok(messages) => emit(events, wake, Event::SearchResults { query, messages }),
-            Err(error) => emit(
-                events,
-                wake,
-                Event::Link(LinkStatus::Error(error.to_string())),
-            ),
-        },
-        Command::MarkRead { chat } => {
+        Command::Search { chat, query } if chat == filter.from => {
+            match archive.search_chat_messages(&chat, &query, None, None, 100) {
+                Ok(messages) => emit(events, wake, Event::SearchResults { query, messages }),
+                Err(error) => emit(
+                    events,
+                    wake,
+                    Event::Link(LinkStatus::Error(error.to_string())),
+                ),
+            }
+        }
+        Command::MarkRead { chat } if chat == filter.from => {
             if let Err(error) = archive.mark_read(&chat) {
                 emit(
                     events,
@@ -362,7 +379,7 @@ async fn process_command(
             chat,
             text,
             quoting,
-        } => {
+        } if chat == filter.to => {
             if text.trim().is_empty() {
                 return;
             }
@@ -462,16 +479,16 @@ async fn process_command(
                     result: delivered,
                 },
             );
-            if let Ok(chats) = archive.chats() {
-                emit(events, wake, Event::Chats(chats));
-            }
+            emit_selected_chat(archive, &filter.from, events, wake);
         }
         Command::Shutdown => {}
+        _ => {}
     }
 }
 
 fn process_wa_event(
     event: &WaEvent,
+    filter: &DirectFilter,
     archive: &Archive,
     events: &mpsc::Sender<Event>,
     wake: &BackendWake,
@@ -492,12 +509,17 @@ fn process_wa_event(
         WaEvent::HistorySync(sync) => {
             if let Some(sync) = sync.get() {
                 for conversation in &sync.conversations {
-                    store_history_conversation(conversation, archive, events, wake);
+                    if conversation.id == filter.from {
+                        store_history_conversation(conversation, filter, archive, events, wake);
+                    }
                 }
                 if sync.sync_type == wa::history_sync::HistorySyncType::ON_DEMAND
                     && sync.progress == Some(100)
                 {
                     for conversation in &sync.conversations {
+                        if conversation.id != filter.from {
+                            continue;
+                        }
                         emit(
                             events,
                             wake,
@@ -507,14 +529,15 @@ fn process_wa_event(
                         );
                     }
                 }
-                if let Ok(chats) = archive.chats() {
-                    emit(events, wake, Event::Chats(chats));
-                }
+                emit_selected_chat(archive, &filter.from, events, wake);
             }
         }
         WaEvent::Messages(batch) => {
             for inbound in batch.iter() {
                 let chat = inbound.info.source.chat.to_string();
+                if !accept_live_chat(filter, &chat, inbound.info.source.is_from_me) {
+                    continue;
+                }
                 let sender = inbound.info.source.sender.to_string();
                 let content = inbound
                     .message
@@ -564,11 +587,11 @@ fn process_wa_event(
                 if !row.from_me {
                     let _ = archive.bump_unread(&chat);
                 }
-                emit(events, wake, Event::Message(row));
+                if row.chat == filter.from {
+                    emit(events, wake, Event::Message(row));
+                }
             }
-            if let Ok(chats) = archive.chats() {
-                emit(events, wake, Event::Chats(chats));
-            }
+            emit_selected_chat(archive, &filter.from, events, wake);
         }
         _ => {}
     }
@@ -576,11 +599,15 @@ fn process_wa_event(
 
 fn store_history_conversation(
     conversation: &whatsapp_rust::prelude::wa::Conversation,
+    filter: &DirectFilter,
     archive: &Archive,
     events: &mpsc::Sender<Event>,
     wake: &BackendWake,
 ) {
     let chat = conversation.id.as_str();
+    if chat != filter.from {
+        return;
+    }
     let name = conversation
         .name
         .as_deref()
@@ -663,6 +690,25 @@ fn store_history_conversation(
     }
 }
 
+fn emit_selected_chat(
+    archive: &Archive,
+    id: &str,
+    events: &mpsc::Sender<Event>,
+    wake: &BackendWake,
+) {
+    if let Ok(Some(chat)) = archive.chat(id) {
+        emit(events, wake, Event::Chats(vec![chat]));
+    }
+}
+
+fn accept_live_chat(filter: &DirectFilter, chat: &str, from_me: bool) -> bool {
+    if from_me {
+        chat == filter.to
+    } else {
+        chat == filter.from
+    }
+}
+
 fn quote_context(
     archive: &Archive,
     destination: &str,
@@ -737,7 +783,10 @@ fn emit(events: &mpsc::Sender<Event>, wake: &BackendWake, event: Event) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendWake, Event, process_wa_event, store_history_conversation};
+    use super::{
+        BackendWake, DirectFilter, Event, accept_live_chat, emit_selected_chat, process_wa_event,
+        store_history_conversation,
+    };
     use crate::archive::Archive;
     use crate::model::Content;
     use whatsapp_rust::prelude::{MessageField, wa};
@@ -753,6 +802,10 @@ mod tests {
         let (events, received) = std::sync::mpsc::channel();
         process_wa_event(
             &WaEvent::PairingQrCode(qr),
+            &DirectFilter {
+                to: "to".into(),
+                from: "from".into(),
+            },
             &archive,
             &events,
             &BackendWake::new(|| {}),
@@ -806,7 +859,17 @@ mod tests {
 
         let archive = Archive::in_memory().unwrap();
         let (events, _receiver) = std::sync::mpsc::channel();
-        store_history_conversation(&conversation, &archive, &events, &BackendWake::new(|| {}));
+        let filter = DirectFilter {
+            to: chat.into(),
+            from: chat.into(),
+        };
+        store_history_conversation(
+            &conversation,
+            &filter,
+            &archive,
+            &events,
+            &BackendWake::new(|| {}),
+        );
         let rows = archive.messages(chat, None, 10).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "history-message");
@@ -815,5 +878,55 @@ mod tests {
             matches!(&rows[0].content, Content::Text { text, .. } if text == "hello from history")
         );
         assert_eq!(archive.chats().unwrap()[0].name, "Fixture contact");
+    }
+
+    #[test]
+    fn live_filter_accepts_selected_group_from_all_members_and_only_target_outbound() {
+        let filter = DirectFilter {
+            to: "target@s.whatsapp.net".into(),
+            from: "team@g.us".into(),
+        };
+        assert!(accept_live_chat(&filter, "team@g.us", false));
+        assert!(!accept_live_chat(&filter, "other@g.us", false));
+        assert!(accept_live_chat(&filter, "target@s.whatsapp.net", true));
+        assert!(!accept_live_chat(&filter, "unrelated@s.whatsapp.net", true));
+    }
+
+    #[test]
+    fn unrelated_history_conversation_is_not_archived_or_emitted() {
+        let mut conversation = wa::Conversation::default();
+        conversation.id = "unrelated@s.whatsapp.net".into();
+        conversation.name = Some("unrelated fixture".into());
+        let archive = Archive::in_memory().unwrap();
+        let (events, received) = std::sync::mpsc::channel();
+        let filter = DirectFilter {
+            to: "target@s.whatsapp.net".into(),
+            from: "selected@g.us".into(),
+        };
+        store_history_conversation(
+            &conversation,
+            &filter,
+            &archive,
+            &events,
+            &BackendWake::new(|| {}),
+        );
+        assert!(archive.chat("unrelated@s.whatsapp.net").unwrap().is_none());
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn chat_metadata_event_contains_only_the_selected_receive_chat() {
+        let archive = Archive::in_memory().unwrap();
+        archive
+            .ensure_chat("selected@g.us", "Selected group")
+            .unwrap();
+        archive
+            .ensure_chat("unrelated@s.whatsapp.net", "Unrelated")
+            .unwrap();
+        let (events, received) = std::sync::mpsc::channel();
+        emit_selected_chat(&archive, "selected@g.us", &events, &BackendWake::new(|| {}));
+        assert!(
+            matches!(received.recv().unwrap(), Event::Chats(chats) if chats.len() == 1 && chats[0].id == "selected@g.us")
+        );
     }
 }
