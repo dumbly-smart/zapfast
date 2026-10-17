@@ -28,6 +28,7 @@ pub mod profile;
 pub mod qr;
 pub mod render;
 pub mod state;
+pub mod selector;
 pub mod terminal;
 pub mod vault;
 
@@ -90,7 +91,7 @@ impl SessionBackend for LiveBackend {
 }
 
 /// Runs one foreground terminal session. The profile lock outlives backend shutdown.
-pub fn run(profile: Profile, passphrase: Zeroizing<String>) -> anyhow::Result<()> {
+pub fn run(profile: Profile, passphrase: Zeroizing<String>, to: selector::ChatSelector, from: selector::ChatSelector) -> anyhow::Result<()> {
     let _lock = profile.acquire()?;
     let dirs = profile.account_dirs();
     let key = Vault::open_or_create(
@@ -98,6 +99,9 @@ pub fn run(profile: Profile, passphrase: Zeroizing<String>) -> anyhow::Result<()
         &dirs.archive_db(),
         &passphrase,
     )?;
+    let archive = crate::archive::Archive::open_with_key(&dirs.archive_db(), &key)?;
+    let to = to.resolve(&archive)?;
+    let from = from.resolve(&archive)?;
     drop(passphrase);
     let mut terminal = TerminalGuard::enter()?;
     let (wake_tx, wake_rx) = mpsc::channel();
@@ -112,7 +116,7 @@ pub fn run(profile: Profile, passphrase: Zeroizing<String>) -> anyhow::Result<()
         let _ = wake_tx.send(Wake::Backend);
     });
     let mut backend = LiveBackend(None);
-    let result = drive_session(&mut backend, dirs, wake, key, &wake_rx, &mut terminal);
+    let result = drive_session(&mut backend, dirs, wake, key, to, from, &wake_rx, &mut terminal);
     stopping.store(true, Ordering::SeqCst);
     let _ = input_thread.join();
     for id in signal_ids {
@@ -168,6 +172,8 @@ fn drive_session<B: SessionBackend>(
     dirs: crate::paths::AccountDirs,
     wake: BackendWake,
     key: Zeroizing<[u8; 32]>,
+    _to: selector::ResolvedChat,
+    _from: selector::ResolvedChat,
     wake_rx: &mpsc::Receiver<Wake>,
     terminal: &mut TerminalGuard,
 ) -> anyhow::Result<()> {

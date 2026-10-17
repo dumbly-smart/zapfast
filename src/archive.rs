@@ -59,6 +59,14 @@ pub struct Archive {
     connection: Connection,
 }
 
+/// A contact or group whose saved name exactly matches a direct-mode selector.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatNameMatch {
+    pub id: String,
+    pub name: String,
+    pub is_group: bool,
+}
+
 pub type Result<T> = std::result::Result<T, rusqlite::Error>;
 
 /// Marks an archived photo whose clip is known as a motion photo. Only the
@@ -876,6 +884,25 @@ impl Archive {
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN} WHERE c.id = ?1"
         ))?;
         statement.query_row(params![id], chat_from_row).optional()
+    }
+
+    /// Resolves an exact saved contact or group name using metadata only.
+    pub fn chat_names(&self, name: &str) -> Result<Vec<ChatNameMatch>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, display_name, is_group FROM (
+               SELECT c.id, c.name AS display_name, 1 AS is_group FROM chats c
+                WHERE c.kind = 'group' AND c.name = ?1 COLLATE NOCASE
+               UNION ALL
+               SELECT c.id, COALESCE(NULLIF(p.full_name, ''), NULLIF(p.first_name, ''), NULLIF(p.push_name, '')),
+                      0 AS is_group
+                 FROM contacts p JOIN chats c ON c.id = p.id
+                WHERE (p.full_name = ?1 COLLATE NOCASE OR p.first_name = ?1 COLLATE NOCASE OR p.push_name = ?1 COLLATE NOCASE)
+             ) ORDER BY display_name COLLATE NOCASE, id",
+        )?;
+        let rows = statement.query_map(params![name], |row| {
+            Ok(ChatNameMatch { id: row.get(0)?, name: row.get::<_, Option<String>>(1)?.unwrap_or_default(), is_group: row.get::<_, i64>(2)? != 0 })
+        })?;
+        rows.collect()
     }
 
     pub fn bump_unread(&self, id: &str) -> Result<()> {
@@ -2602,6 +2629,23 @@ pub(crate) mod tests {
     }
     use super::*;
     use crate::model::Content;
+
+    #[test]
+    fn chat_name_lookup_matches_metadata_only_and_reports_collisions() {
+        let archive = Archive::in_memory().unwrap();
+        archive.upsert_chat(&Chat::new("alice@s.whatsapp.net".into(), "Alice".into())).unwrap();
+        archive.upsert_contact(&Contact { id: "alice@s.whatsapp.net".into(), full_name: Some("Alice Example".into()), first_name: Some("Alice".into()), push_name: Some("Al".into()) }).unwrap();
+        let mut group = Chat::new("group@g.us".into(), "Design Team".into());
+        group.kind = ChatKind::Group;
+        archive.upsert_chat(&group).unwrap();
+        assert_eq!(archive.chat_names("Alice Example").unwrap()[0].id, "alice@s.whatsapp.net");
+        assert_eq!(archive.chat_names("Al").unwrap()[0].id, "alice@s.whatsapp.net");
+        assert!(archive.chat_names("Ali").unwrap().is_empty());
+        assert!(archive.chat_names("Design Team").unwrap()[0].is_group);
+        archive.upsert_chat(&Chat::new("other@s.whatsapp.net".into(), "Design Team".into())).unwrap();
+        archive.upsert_contact(&Contact { id: "other@s.whatsapp.net".into(), full_name: Some("Design Team".into()), ..Default::default() }).unwrap();
+        assert_eq!(archive.chat_names("Design Team").unwrap().len(), 2);
+    }
 
     #[test]
     fn group_description_migrates_existing_chats() {
