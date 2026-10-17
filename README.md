@@ -44,7 +44,7 @@ https://github.com/user-attachments/assets/2bf86b54-45fc-4add-8de7-c426c3cdad9b
 
 </details>
 
-[Features](#your-chats-on-your-desktop) · [Install](#install) · [Link your phone](#link-your-phone) · [Help](#guides-and-help)
+[Features](#your-chats-on-your-desktop) · [Install](#install) · [Link your phone](#link-your-phone) · [Use over SSH](#use-zapfast-over-ssh) · [Help](#guides-and-help)
 
 ## Your chats, on your desktop
 
@@ -55,6 +55,7 @@ https://github.com/user-attachments/assets/2bf86b54-45fc-4add-8de7-c426c3cdad9b
 | **Your history** | Keep your chats in an encrypted archive on this computer, and fetch older messages from your phone as you scroll. |
 | **Several numbers** | Link more than one WhatsApp number and switch between them in one window. |
 | **Desktop controls** | Use keyboard shortcuts, select and copy text across messages, and stay linked in the tray with notifications. |
+| **SSH terminal** | Run a small headless Rust client on a Linux server through a normal SSH login. Browse chats and history, search, and send or reply to text messages. |
 | **Themes** | Choose light, dark, system appearance, or custom colours. On Omarchy, follow your desktop theme. |
 | **Privacy** | Hide locked chats behind a code, or the whole window behind an app lock. Nothing goes to a server of ours. |
 
@@ -83,6 +84,46 @@ read what ZapFast has already stored. See
 walkthrough and [How it links](https://zapfast.rocks/how-it-links/) for the
 details.
 
+## Use ZapFast over SSH
+
+`zapfast-ssh` runs in your SSH terminal on a Linux server. It uses the same
+WhatsApp protocol library, but is a separate, headless text client: it can
+browse chats and saved history, search messages, and send or reply to text. It
+does not include the desktop window, media, or calls. It runs only while you
+are logged in; it does not start a server or background service.
+
+Build and install it **on the Linux server** from a ZapFast checkout:
+
+```sh
+cargo build --release --no-default-features --features ssh --bin zapfast-ssh
+install -Dm755 target/release/zapfast-ssh "$HOME/.local/bin/zapfast-ssh"
+```
+
+Make sure `$HOME/.local/bin` is in that account's `PATH`, then connect from
+your computer with a terminal allocated:
+
+```sh
+ssh -t your-user@your-server zapfast-ssh
+```
+
+The client prompts for your archive passphrase without displaying it. You
+enter it each time you connect. On the first run, scan the QR code with
+WhatsApp on your phone: **Settings → Linked devices → Link a device**. If the
+terminal is too small to display the code, enlarge it; the QR display redraws
+when the terminal resizes.
+
+Use **↑/↓** or **j/k** to move through chats and messages, **Enter** to open a
+chat, **/** to search, **i** to compose, **Enter** to send, **r** to reply to
+the selected message, **Page Up** to request older history, **Esc** to go back,
+and **q** to quit. Older history depends on what WhatsApp provides to linked
+devices.
+
+Each Unix login has a private profile on the server containing its WhatsApp
+session and encrypted local archive. Only one session per Unix user can run at
+a time. Keep the passphrase safe; it is never accepted as a command-line
+argument or environment variable. For requirements, storage details, and
+troubleshooting, see the [SSH client guide](docs/ssh.md).
+
 ## Guides and help
 
 The complete guide lives at **[zapfast.rocks](https://zapfast.rocks/)**.
@@ -91,6 +132,7 @@ The complete guide lives at **[zapfast.rocks](https://zapfast.rocks/)**.
 |---|---|
 | Know what ZapFast does and does not do yet | [What is ZapFast?](https://zapfast.rocks/what-is-zapfast/) |
 | Link your phone or build from source | [Getting started](https://zapfast.rocks/getting-started/) |
+| Run the headless terminal client over SSH | [SSH client guide](docs/ssh.md) |
 | Learn messages, stickers, polls, and shortcuts | [Using ZapFast](https://zapfast.rocks/using-zapfast/) |
 | Find settings, stored files, encryption, the app lock, and updates | [Settings and files](https://zapfast.rocks/settings-and-files/) |
 | Make your own theme | [Making a theme](https://zapfast.rocks/themes/) |
