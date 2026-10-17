@@ -1439,6 +1439,10 @@ fn row(app: &mut App, ui: &mut egui::Ui, chat: &Chat) -> egui::Response {
     if ui.is_rect_visible(rect) {
         if selected {
             widgets::row_highlight(ui, &palette, rect, palette.surface_active);
+            let marker =
+                Rect::from_center_size(pos2(rect.left() + 10.0, rect.center().y), vec2(3.0, 24.0));
+            ui.painter()
+                .rect_filled(marker, egui::CornerRadius::same(2), palette.accent);
         } else if response.hovered() {
             widgets::row_highlight(ui, &palette, rect, palette.surface_hover);
         }

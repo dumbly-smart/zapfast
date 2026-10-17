@@ -1914,6 +1914,26 @@ fn composer(app: &mut App, ui: &mut egui::Ui, chat: &Chat) {
     // Toasts sit above the composer so they never cover its buttons.
     ui.ctx()
         .data_mut(|data| data.insert_temp(super::composer_rect_id(), shown.response.rect));
+    if !palette.vibrant()
+        && let Some(field) = ui
+            .ctx()
+            .data(|data| data.get_temp::<Rect>(composer_pill_id()))
+    {
+        let focused = ui.memory(|memory| memory.has_focus(composer_text_id()));
+        ui.painter().rect_stroke(
+            field.shrink(0.5),
+            CornerRadius::same(COMPOSER_RADIUS),
+            Stroke::new(
+                if focused { 1.25 } else { 0.75 },
+                if focused {
+                    palette.accent
+                } else {
+                    palette.outline
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 /// Corner radius of the composer's rounded field.
