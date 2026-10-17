@@ -9,6 +9,7 @@ use std::thread::{self, JoinHandle};
 
 use anyhow::{Context, Result};
 use tokio::sync::mpsc as tokio_mpsc;
+use whatsapp_rust::pair::NATIVE_CAMERA_DEEP_LINK_PREFIX;
 use whatsapp_rust::prelude::{Bot, Jid, MessageBuilderExt, MessageExt, wa};
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust::types::events::{Event as WaEvent, EventHandler};
@@ -479,7 +480,11 @@ fn process_wa_event(
     match event {
         WaEvent::PairingQrCode(qr) => {
             emit(events, wake, Event::Link(LinkStatus::Pairing));
-            emit(events, wake, Event::PairingQr(qr.code.clone()));
+            emit(
+                events,
+                wake,
+                Event::PairingQr(format!("{NATIVE_CAMERA_DEEP_LINK_PREFIX}{}", qr.code)),
+            );
         }
         WaEvent::Connected(_) => emit(events, wake, Event::Link(LinkStatus::Connected)),
         WaEvent::Disconnected(_) => emit(events, wake, Event::Link(LinkStatus::Disconnected)),
@@ -732,10 +737,32 @@ fn emit(events: &mpsc::Sender<Event>, wake: &BackendWake, event: Event) {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackendWake, store_history_conversation};
+    use super::{BackendWake, Event, process_wa_event, store_history_conversation};
     use crate::archive::Archive;
     use crate::model::Content;
     use whatsapp_rust::prelude::{MessageField, wa};
+    use whatsapp_rust::types::events::{Event as WaEvent, PairingQrCode};
+
+    #[test]
+    fn pairing_qr_contains_the_linked_devices_camera_url() {
+        let qr = PairingQrCode::builder()
+            .code("fixture-pairing-token".into())
+            .timeout(std::time::Duration::from_secs(20))
+            .build();
+        let archive = Archive::in_memory().unwrap();
+        let (events, received) = std::sync::mpsc::channel();
+        process_wa_event(
+            &WaEvent::PairingQrCode(qr),
+            &archive,
+            &events,
+            &BackendWake::new(|| {}),
+        );
+        let _status = received.recv().unwrap();
+        assert!(matches!(
+            received.recv().unwrap(),
+            Event::PairingQr(payload) if payload == "https://wa.me/settings/linked_devices#fixture-pairing-token"
+        ));
+    }
 
     #[test]
     fn wake_notifies_receiver() {

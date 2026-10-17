@@ -13,6 +13,10 @@ use super::{
 
 pub fn draw(frame: &mut Frame, state: &SshState) {
     let area = frame.area();
+    if let Some(payload) = state.pairing_qr.as_deref() {
+        draw_qr(frame, payload, area);
+        return;
+    }
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -27,11 +31,7 @@ pub fn draw(frame: &mut Frame, state: &SshState) {
     );
     frame.render_widget(Paragraph::new(status), sections[0]);
 
-    if let Some(payload) = state.pairing_qr.as_deref() {
-        draw_qr(frame, payload, sections[1]);
-    } else {
-        draw_chats(frame, state, sections[1]);
-    }
+    draw_chats(frame, state, sections[1]);
 
     let footer = if let Some(reason) = &state.refusal {
         format!(" Send refused: {reason}\n{}", state.draft)
@@ -49,24 +49,31 @@ pub fn draw(frame: &mut Frame, state: &SshState) {
 }
 
 fn draw_qr(frame: &mut Frame, payload: &str, area: Rect) {
-    match encode_cells(payload, area.width, area.height.saturating_sub(2)) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Scan with WhatsApp · Linked devices");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    match encode_cells(payload, inner.width, inner.height) {
         Ok(rows) => {
             let text = Text::from(rows.into_iter().map(Line::from).collect::<Vec<_>>());
+            let text_height = text.height().min(u16::MAX as usize) as u16;
+            let y = inner.y + inner.height.saturating_sub(text_height) / 2;
+            let qr_area = Rect::new(inner.x, y, inner.width, text_height);
             frame.render_widget(
-                Paragraph::new(text).alignment(Alignment::Center).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title("Scan with WhatsApp · Esc to quit"),
-                ),
-                area,
+                Paragraph::new(text)
+                    .alignment(Alignment::Center)
+                    .style(Style::default().fg(Color::Black).bg(Color::White)),
+                qr_area,
             );
         }
-        Err(QrSizeError::TooSmall | QrSizeError::InvalidCode) => frame.render_widget(
-            Paragraph::new("Resize terminal to scan this pairing code.")
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("Pair device")),
-            area,
-        ),
+        Err(QrSizeError::TooSmall | QrSizeError::InvalidCode) => {
+            frame.render_widget(
+                Paragraph::new("Resize terminal to scan this pairing code.")
+                    .alignment(Alignment::Center),
+                inner,
+            );
+        }
     }
 }
 
@@ -160,6 +167,15 @@ mod tests {
         let screen = render(&state, 30, 8);
         assert!(screen.contains("Resize terminal"));
         assert!(!screen.contains("PRIVATE_PAIRING_FIXTURE"));
+    }
+
+    #[test]
+    fn pairing_qr_uses_the_full_screen_on_a_typical_terminal() {
+        let mut state = SshState::new();
+        state.pairing_qr = Some("fixture payload".into());
+        let screen = render(&state, 80, 24);
+        assert!(!screen.contains("Resize terminal"));
+        assert!(screen.contains('▀') || screen.contains('▄') || screen.contains('█'));
     }
 
     #[test]
