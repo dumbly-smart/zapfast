@@ -19,11 +19,17 @@ name = "zapfast"
 path = "src/main.rs"
 required-features = ["desktop"]
 
+[[bin]]
+name = "zapfast-ssh"
+path = "src/bin/zapfast-ssh.rs"
+required-features = ["ssh"]
+
 [dependencies]
 anyhow = "1"
 argon2 = { version = "0.5", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 crossterm = { version = "0.28", optional = true }
+signal-hook = { version = "0.3", optional = true }
 # Hashes saved stickers by content. Already included through wacore.
 sha2 = "0.11"
 # Already in the tree through rustls; verifies lock codes.
@@ -309,7 +315,7 @@ required-features = ["desktop"]
 demo = []
 default = ["desktop"]
 desktop = ["whatsapp-rust/voip", "dep:zbus-secret-service-keyring-store", "dep:arboard", "dep:async-channel", "dep:eframe", "dep:egui", "dep:egui_extras", "dep:emojis", "dep:fastframe-desktop", "dep:fastframe-emoji", "dep:fastframe-file", "dep:fastframe-fonts", "dep:fastframe-i18n", "dep:fastframe-icons", "dep:fastframe-instance", "dep:fastframe-log", "dep:fastframe-notifications", "dep:fastframe-power", "dep:fastframe-scroll", "dep:fastframe-shell", "dep:fastframe-text", "dep:fastframe-theme", "dep:fastframe-titlebar", "dep:fastframe-tray", "dep:fastframe-update", "dep:image", "dep:libwebp-sys2", "dep:linuxvideo", "dep:mime_guess2", "dep:mp4", "dep:nokhwa", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation", "dep:ogg", "dep:open", "dep:openh264", "dep:openh264-sys2", "dep:opus", "dep:raw-window-handle", "dep:reqwest", "dep:resvg", "dep:rfd", "dep:rodio", "dep:skrifa", "dep:symphonia", "dep:tray-icon", "dep:webp-animation", "dep:windows", "dep:winit", "dep:zbus"]
-ssh = ["dep:argon2", "dep:async-channel", "dep:chacha20poly1305", "dep:crossterm", "dep:ratatui"]
+ssh = ["dep:argon2", "dep:async-channel", "dep:chacha20poly1305", "dep:crossterm", "dep:ratatui", "dep:signal-hook"]
 
 [profile.release]
 lto = "thin"

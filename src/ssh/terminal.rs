@@ -56,6 +56,43 @@ impl TerminalGuard {
     }
 }
 
+/// Reads a passphrase from the controlling terminal without echoing it.
+pub fn read_passphrase() -> anyhow::Result<zeroize::Zeroizing<String>> {
+    use crossterm::event::{KeyCode, KeyEventKind};
+    use std::io::Write as _;
+
+    enable_raw_mode().context("enable raw mode for passphrase prompt")?;
+    struct RawPrompt;
+    impl Drop for RawPrompt {
+        fn drop(&mut self) {
+            let _ = disable_raw_mode();
+            let _ = writeln!(io::stderr());
+        }
+    }
+    let _raw = RawPrompt;
+    eprint!("Archive passphrase: ");
+    io::stderr().flush()?;
+    let mut passphrase = zeroize::Zeroizing::new(String::new());
+    loop {
+        match event::read()? {
+            CrosstermEvent::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Enter => break,
+                KeyCode::Backspace => {
+                    passphrase.pop();
+                }
+                KeyCode::Char(character) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    passphrase.push(character)
+                }
+                KeyCode::Esc => anyhow::bail!("Passphrase entry cancelled"),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    anyhow::ensure!(!passphrase.is_empty(), "Passphrase cannot be empty");
+    Ok(passphrase)
+}
+
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         restore(&mut self.terminal, &mut self.raw, &mut self.alternate);
@@ -114,7 +151,9 @@ impl KeyInput {
                     return vec![InputAction::Search(self.buffer.clone())];
                 }
                 KeyCode::Enter => {
-                    return vec![InputAction::Compose(self.buffer.clone()), InputAction::Send];
+                    let draft = std::mem::take(&mut self.buffer);
+                    self.mode = InputMode::Browse;
+                    return vec![InputAction::Compose(draft), InputAction::Send];
                 }
                 KeyCode::Backspace => {
                     self.buffer.pop();
@@ -122,11 +161,11 @@ impl KeyInput {
                 }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.buffer.push(c);
-                    return if self.mode == InputMode::Compose {
-                        vec![InputAction::Compose(self.buffer.clone())]
+                    return vec![if self.mode == InputMode::Compose {
+                        InputAction::Compose(self.buffer.clone())
                     } else {
-                        vec![]
-                    };
+                        InputAction::Search(self.buffer.clone())
+                    }];
                 }
                 _ => return vec![],
             }
@@ -144,6 +183,24 @@ impl KeyInput {
                 vec![]
             }
             KeyCode::Char('r') => vec![InputAction::QuoteSelected],
+            KeyCode::Up | KeyCode::Char('k') if state.open_chat.is_some() => {
+                let current = state
+                    .selected_message
+                    .as_ref()
+                    .and_then(|id| state.messages.iter().position(|message| &message.id == id))
+                    .unwrap_or(0);
+                vec![InputAction::SelectMessage(current.saturating_sub(1))]
+            }
+            KeyCode::Down | KeyCode::Char('j') if state.open_chat.is_some() => {
+                let current = state
+                    .selected_message
+                    .as_ref()
+                    .and_then(|id| state.messages.iter().position(|message| &message.id == id))
+                    .unwrap_or(0);
+                vec![InputAction::SelectMessage(
+                    (current + 1).min(state.messages.len().saturating_sub(1)),
+                )]
+            }
             KeyCode::Up | KeyCode::Char('k') => vec![InputAction::SelectChat(
                 state.selected_chat.saturating_sub(1),
             )],
