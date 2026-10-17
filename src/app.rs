@@ -2816,7 +2816,7 @@ impl App {
             .chats
             .iter()
             .filter(|chat| chat.locked == locked)
-            .filter(|chat| locked || chat.archived == self.show_archived || !needle.is_empty())
+            .filter(|chat| locked || chat.archived == self.show_archived)
             .filter(|chat| match &self.label_filter {
                 // A label lists every chat wearing it, channels included,
                 // because someone put each of them there.
