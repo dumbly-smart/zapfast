@@ -16,7 +16,7 @@ use whatsapp_rust::waproto::buffa::Message as _;
 use zeroize::Zeroizing;
 
 use crate::archive::Archive;
-use crate::model::{Chat, Content, Delivery, Message};
+use crate::model::{Chat, Content, Delivery, Message, Quoted, ReplyTarget};
 use crate::paths::AccountDirs;
 
 #[derive(Clone)]
@@ -46,14 +46,17 @@ pub enum LinkStatus {
     Error(String),
 }
 
-#[derive(Debug)]
 pub enum Event {
     Link(LinkStatus),
     PairingQr(String),
     Chats(Vec<Chat>),
     ChatMessages {
         chat: String,
+        before: Option<(i64, String)>,
         messages: Vec<Message>,
+    },
+    HistoryComplete {
+        chat: String,
     },
     SearchResults {
         query: String,
@@ -62,11 +65,13 @@ pub enum Event {
     Message(Message),
     SendFinished {
         id: String,
+        chat: String,
+        text: String,
+        quoting: Option<ReplyTarget>,
         result: std::result::Result<(), String>,
     },
 }
 
-#[derive(Debug)]
 pub enum Command {
     LoadChats,
     LoadChat {
@@ -86,6 +91,7 @@ pub enum Command {
     SendText {
         chat: String,
         text: String,
+        quoting: Option<ReplyTarget>,
     },
     MarkRead {
         chat: String,
@@ -293,7 +299,15 @@ async fn process_command(
                 .map(|(timestamp, id)| (*timestamp, id.as_str())),
             limit,
         ) {
-            Ok(messages) => emit(events, wake, Event::ChatMessages { chat, messages }),
+            Ok(messages) => emit(
+                events,
+                wake,
+                Event::ChatMessages {
+                    chat,
+                    before,
+                    messages,
+                },
+            ),
             Err(error) => emit(
                 events,
                 wake,
@@ -343,7 +357,11 @@ async fn process_command(
                 );
             }
         }
-        Command::SendText { chat, text } => {
+        Command::SendText {
+            chat,
+            text,
+            quoting,
+        } => {
             if text.trim().is_empty() {
                 return;
             }
@@ -357,6 +375,26 @@ async fn process_command(
                     );
                     return;
                 }
+            };
+            let quote = match quoting.as_ref() {
+                Some(target) => match quote_context(archive, &chat, target) {
+                    Ok(quote) => Some(quote),
+                    Err(error) => {
+                        emit(
+                            events,
+                            wake,
+                            Event::SendFinished {
+                                id: String::new(),
+                                chat,
+                                text,
+                                quoting,
+                                result: Err(error),
+                            },
+                        );
+                        return;
+                    }
+                },
+                None => None,
             };
             let id = client.generate_message_id().into_string();
             let timestamp = jiff::Timestamp::now().as_second();
@@ -372,28 +410,36 @@ async fn process_command(
                 status: Delivery::Pending,
                 delivered_at: None,
                 read_at: None,
-                quoted: None,
+                quoted: quote.as_ref().map(|(_, shown)| shown.clone()),
                 reactions: Vec::new(),
                 edited: false,
                 mentions: Vec::new(),
                 forwarded: false,
                 thumbnail: None,
             };
+            let body = match quote {
+                Some((context, _)) => wa::Message::text_with_context(text.clone(), context),
+                None => wa::Message::text(text.clone()),
+            };
+            let raw = body.encode_to_vec();
             if let Err(error) = archive
                 .ensure_chat(&chat, &chat)
-                .and_then(|_| archive.insert_message(&row, None))
+                .and_then(|_| archive.insert_message(&row, Some(&raw)))
             {
                 emit(
                     events,
                     wake,
                     Event::SendFinished {
                         id,
+                        chat,
+                        text,
+                        quoting,
                         result: Err(error.to_string()),
                     },
                 );
                 return;
             }
-            let result = client.send_message(jid, wa::Message::text(text)).await;
+            let result = client.send_message(jid, body).await;
             let delivered = match result {
                 Ok(_) => archive
                     .set_status(&chat, &id, Delivery::Sent, timestamp)
@@ -409,6 +455,9 @@ async fn process_command(
                 wake,
                 Event::SendFinished {
                     id,
+                    chat,
+                    text,
+                    quoting,
                     result: delivered,
                 },
             );
@@ -439,6 +488,19 @@ fn process_wa_event(
             if let Some(sync) = sync.get() {
                 for conversation in &sync.conversations {
                     store_history_conversation(conversation, archive, events, wake);
+                }
+                if sync.sync_type == wa::history_sync::HistorySyncType::ON_DEMAND
+                    && sync.progress == Some(100)
+                {
+                    for conversation in &sync.conversations {
+                        emit(
+                            events,
+                            wake,
+                            Event::HistoryComplete {
+                                chat: conversation.id.clone(),
+                            },
+                        );
+                    }
                 }
                 if let Ok(chats) = archive.chats() {
                     emit(events, wake, Event::Chats(chats));
@@ -592,7 +654,74 @@ fn store_history_conversation(
             continue;
         }
         let _ = archive.touch_activity(chat, timestamp);
+        emit(events, wake, Event::Message(row));
     }
+}
+
+fn quote_context(
+    archive: &Archive,
+    destination: &str,
+    target: &ReplyTarget,
+) -> std::result::Result<(wa::ContextInfo, Quoted), String> {
+    let source = target.source_chat(destination);
+    if target.id.is_empty() {
+        return Err("The quoted message is unavailable".into());
+    }
+    let row = archive
+        .message(source, &target.id)
+        .map_err(|_| "The quoted message is unavailable".to_owned())?
+        .ok_or_else(|| "The quoted message is unavailable".to_owned())?;
+    if matches!(row.content, Content::Revoked) {
+        return Err("The quoted message is unavailable".into());
+    }
+    if source != destination
+        && (row.private_reply_recipient().is_none() || row.sender != destination)
+    {
+        return Err("That cross-chat reply is unavailable".into());
+    }
+    let raw = archive
+        .raw(source, &target.id)
+        .map_err(|_| "The quoted message is unavailable".to_owned())?
+        .ok_or_else(|| "The quoted message is unavailable".to_owned())?;
+    let original = wa::Message::decode_from_slice(&raw)
+        .map_err(|_| "The quoted message is unavailable".to_owned())?;
+    let destination_jid: Jid = destination
+        .parse()
+        .map_err(|_| "The destination chat is invalid".to_owned())?;
+    let source_jid: Jid = source
+        .parse()
+        .map_err(|_| "The quoted chat is invalid".to_owned())?;
+    let sender_text = if row.from_me {
+        destination
+    } else {
+        row.sender.as_str()
+    };
+    let sender: Jid = sender_text
+        .parse()
+        .map_err(|_| "The quoted sender is unavailable".to_owned())?;
+    let mut context = whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info(
+        row.id.clone(),
+        &sender,
+        &source_jid,
+        &destination_jid,
+        &original,
+    );
+    // A quoted @all stays visible but must not notify the group again.
+    let bits = context.non_jid_mentions.unwrap_or(0) & !1;
+    context.non_jid_mentions = (bits != 0).then_some(bits);
+    let shown = Quoted {
+        chat: (source != destination).then(|| source.to_owned()),
+        id: row.id,
+        sender: sender_text.to_owned(),
+        sender_name: if row.from_me {
+            Some("You".into())
+        } else {
+            row.sender_name.clone()
+        },
+        summary: row.content.summary(),
+        mentions: row.mentions,
+    };
+    Ok((context, shown))
 }
 
 fn emit(events: &mpsc::Sender<Event>, wake: &BackendWake, event: Event) {
