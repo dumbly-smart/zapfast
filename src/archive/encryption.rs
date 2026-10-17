@@ -3,8 +3,10 @@
 use std::{fs, io::Read, path::Path};
 
 use anyhow::{Context, Result, ensure};
+#[cfg(feature = "desktop")]
 use keyring_core::api::CredentialStoreApi;
 use rusqlite::{Connection, OpenFlags};
+#[cfg(feature = "desktop")]
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -24,6 +26,7 @@ fn plaintext(path: &Path) -> Result<bool> {
     Ok(&header == HEADER)
 }
 
+#[cfg(feature = "desktop")]
 pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     let parent = path.parent().context("Archive has no parent directory")?;
     fs::create_dir_all(parent)?;
@@ -36,6 +39,7 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
 }
 
 /// Copies the keyring entry when an archive moves to another folder.
+#[cfg(feature = "desktop")]
 pub fn copy_archive_key(old_archive: &Path, new_archive: &Path) -> Result<()> {
     if plaintext(old_archive)? {
         return Ok(());
@@ -43,6 +47,7 @@ pub fn copy_archive_key(old_archive: &Path, new_archive: &Path) -> Result<()> {
     copy_archive_key_in(old_archive, new_archive, &*platform_store()?)
 }
 
+#[cfg(feature = "desktop")]
 fn copy_archive_key_in(
     old_archive: &Path,
     new_archive: &Path,
@@ -110,6 +115,7 @@ fn copy_archive_key_in(
 
 /// Deletes the keyring entry of an archive folder that is gone for good,
 /// such as a removed account's. Never call it while the archive exists.
+#[cfg(feature = "desktop")]
 pub fn forget_archive_key(identity: &str) -> Result<()> {
     let entry = platform_store()?
         .build("rocks.zapfast.ZapFast", identity, None)
@@ -121,10 +127,12 @@ pub fn forget_archive_key(identity: &str) -> Result<()> {
 }
 
 /// The keyring identity of the archive at `path`, while its folder exists.
+#[cfg(feature = "desktop")]
 pub fn archive_key_identity(path: &Path) -> Result<String> {
     identity_for(path.parent().context("Archive has no parent directory")?)
 }
 
+#[cfg(feature = "desktop")]
 fn identity_for(parent: &Path) -> Result<String> {
     // Separate profiles must not overwrite each other's keys. The credential
     // label contains a digest, never a user path, phone number or message data.
@@ -138,6 +146,7 @@ fn identity_for(parent: &Path) -> Result<String> {
     ))
 }
 
+#[cfg(feature = "desktop")]
 fn platform_store() -> Result<std::sync::Arc<dyn CredentialStoreApi>> {
     #[cfg(target_os = "linux")]
     let store = zbus_secret_service_keyring_store::Store::new();
@@ -151,6 +160,7 @@ fn platform_store() -> Result<std::sync::Arc<dyn CredentialStoreApi>> {
         as std::sync::Arc<dyn CredentialStoreApi>)
 }
 
+#[cfg(feature = "desktop")]
 fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<[u8; 32]>> {
     match entry.get_secret() {
         Ok(secret) => {
@@ -185,6 +195,7 @@ fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<
 /// How the Windows store names `ERROR_NOT_ENOUGH_MEMORY`, which `CredWriteW`
 /// returns when Credential Manager holds as many credentials as it can take.
 /// The store keeps its error type private, so its text is what can be matched.
+#[cfg(feature = "desktop")]
 const WINDOWS_CREDENTIALS_FULL: &str = "Windows error code 8";
 
 /// A keyring error as one message.
@@ -193,6 +204,7 @@ const WINDOWS_CREDENTIALS_FULL: &str = "Windows error code 8";
 /// it as the source, so a chain printed with `{:#}` repeated it ("Platform
 /// failure: Windows error code 8: Windows error code 8"). A full Credential
 /// Manager is also named for what it is, with what to do about it.
+#[cfg(feature = "desktop")]
 fn keyring_error(error: keyring_core::Error) -> anyhow::Error {
     match &error {
         keyring_core::Error::PlatformFailure(inner)
@@ -206,6 +218,7 @@ fn keyring_error(error: keyring_core::Error) -> anyhow::Error {
     }
 }
 
+#[cfg(feature = "desktop")]
 fn create_key(entry: &keyring_core::Entry) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0; 32]);
     getrandom::fill(key.as_mut()).context("Could not generate an archive key")?;
@@ -336,7 +349,7 @@ pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
     Ok(connection)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use super::*;
 

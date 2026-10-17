@@ -12,7 +12,7 @@ pub mod app;
 pub mod app_lock;
 #[cfg(all(feature = "desktop", target_os = "linux"))]
 pub mod appearance;
-#[cfg(feature = "desktop")]
+#[cfg(any(feature = "desktop", feature = "ssh"))]
 pub mod archive;
 #[cfg(feature = "desktop")]
 pub mod audio;

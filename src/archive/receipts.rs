@@ -8,6 +8,16 @@
 use super::{Archive, Result, params, status_from_rank, status_rank};
 use crate::model::{Delivery, Recipient};
 
+#[cfg(feature = "desktop")]
+fn now() -> i64 {
+    crate::util::now()
+}
+
+#[cfg(not(feature = "desktop"))]
+fn now() -> i64 {
+    jiff::Timestamp::now().as_second()
+}
+
 impl Archive {
     /// Called once for a newly filed outgoing message, before sending it.
     /// An empty/unknown audience cannot establish that everyone has read.
@@ -129,7 +139,7 @@ impl Archive {
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         let aggregate = status_from_rank(rank.unwrap_or(0));
-        let now = crate::util::now();
+        let now = now();
         let mut changed = false;
         if aggregate >= Delivery::Delivered {
             changed |=
@@ -168,7 +178,7 @@ impl Archive {
             return Ok(None);
         }
         let furthest = status_from_rank(rank);
-        let now = crate::util::now();
+        let now = now();
         let mut changed = None;
         for (status, at) in [
             (Delivery::Delivered, delivered_at),
@@ -233,7 +243,7 @@ impl Archive {
                  SELECT 1 FROM messages m WHERE m.chat = group_receipts.chat AND m.id = group_receipts.id
              )
              AND COALESCE(delivered_at, read_at, played_at, 0) < ?1",
-            params![crate::util::now() - 24 * 60 * 60],
+            params![now() - 24 * 60 * 60],
         )?;
         Ok(())
     }
@@ -367,7 +377,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("archive.db");
         let group = "123-456@g.us";
-        let now = crate::util::now();
+        let now = now();
         {
             let archive = Archive::open_with_key(&path, &[7; 32]).unwrap();
             archive.ensure_chat(group, "Group").unwrap();
@@ -436,7 +446,7 @@ mod tests {
         let archive = Archive::in_memory().unwrap();
         let peer = "4917663430455@s.whatsapp.net";
         let group = "123-456@g.us";
-        let now = crate::util::now();
+        let now = now();
         archive.ensure_chat(peer, "Peer").unwrap();
         archive.ensure_chat(group, "Group").unwrap();
         // Sent from the phone: the peer's receipts outran the message itself.
@@ -503,7 +513,7 @@ mod tests {
     fn receipts_for_a_message_that_never_came_are_pruned_after_a_day() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("archive.db");
-        let now = crate::util::now();
+        let now = now();
         {
             let archive = Archive::open_with_key(&path, &[7; 32]).unwrap();
             for (id, at) in [("stale", now - 25 * 60 * 60), ("fresh", now)] {

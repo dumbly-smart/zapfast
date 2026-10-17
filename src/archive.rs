@@ -13,6 +13,7 @@ mod calls;
 pub use calls::CALL_LOG_LIMIT;
 mod drafts;
 mod encryption;
+#[cfg(feature = "desktop")]
 pub use encryption::{archive_key_identity, copy_archive_key, forget_archive_key};
 mod favorites;
 pub use favorites::Favorite;
@@ -279,6 +280,7 @@ const SEARCH_COLUMNS: &str = "chat, id, sender, sender_name, from_me, timestamp,
 
 /// The same columns without the preview blob, for rows whose preview is
 /// never drawn.
+#[cfg(feature = "desktop")]
 const BARE_COLUMNS: &str = "chat, id, sender, sender_name, from_me, timestamp, content, status, quoted, reactions, edited, NULL AS thumbnail, mentions, forwarded, delivered_at, read_at, history_order";
 
 /// The lowercased text a search matches: text, captions, file names, poll
@@ -395,12 +397,13 @@ pub const GALLERY_PAGE: usize = 200;
 impl Archive {
     /// Unlocks the on-disk archive with its OS keyring key, migrating plaintext
     /// archives before their first encrypted use. Never falls back to plaintext.
+    #[cfg(feature = "desktop")]
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         let key = encryption::key_for(path)?;
         Self::open_with_key(path, &key)
     }
 
-    fn open_with_key(path: &Path, key: &[u8; 32]) -> anyhow::Result<Self> {
+    pub(crate) fn open_with_key(path: &Path, key: &[u8; 32]) -> anyhow::Result<Self> {
         Ok(Self::prepare(encryption::open(path, key)?)?)
     }
 
@@ -615,7 +618,7 @@ impl Archive {
     pub fn set_notification_sound(
         &self,
         id: &str,
-        sound: Option<&crate::settings::NotificationSound>,
+        sound: Option<&crate::notification_sound::NotificationSound>,
     ) -> Result<()> {
         let sound = sound.map(|sound| serde_json::to_string(sound).unwrap_or_default());
         self.connection.execute(
@@ -1384,6 +1387,7 @@ impl Archive {
     /// The rows the info panel files as media, documents and links: this
     /// chat's pictures and videos, its documents, and its text messages that
     /// hold a web link, each kind newest first and cut at `limit`.
+    #[cfg(feature = "desktop")]
     pub fn media_docs_links(&self, chat: &str, limit: usize) -> Result<Vec<Message>> {
         let mut rows = self.rows_of_kind(chat, "IN ('image', 'video')", limit)?;
         rows.extend(self.rows_of_kind(chat, "= 'document'", limit)?);
@@ -1423,6 +1427,7 @@ impl Archive {
 
     /// One chat's newest messages whose content kind matches the SQL
     /// comparison `kinds`, such as `= 'document'`.
+    #[cfg(feature = "desktop")]
     fn rows_of_kind(&self, chat: &str, kinds: &str, limit: usize) -> Result<Vec<Message>> {
         let sql = format!(
             "SELECT {SEARCH_COLUMNS}
@@ -2130,10 +2135,13 @@ impl Archive {
             let (id, mentions) = row?;
             let mentions: Vec<crate::model::MentionRef> =
                 serde_json::from_str(&mentions).unwrap_or_default();
-            if mentions
-                .iter()
-                .any(|mention| crate::mentions::names_us(mention, ours))
-            {
+            if mentions.iter().any(|mention| {
+                mention.id == "mention-all"
+                    || ours.contains(&mention.id.as_str())
+                    || ours
+                        .iter()
+                        .any(|id| id.split('@').next() == Some(mention.user.as_str()))
+            }) {
                 oldest = Some(id);
             }
         }
@@ -2432,6 +2440,38 @@ impl Archive {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "ssh")]
+    #[test]
+    fn supplied_key_opens_encrypted_archive() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("archive.db");
+        let key = [47; 32];
+        let chat = "1@s.whatsapp.net";
+        {
+            let archive = super::Archive::open_with_key(&path, &key).unwrap();
+            archive.ensure_chat(chat, "Fixture").unwrap();
+            archive
+                .insert_message(&super::tests::message(chat, "m1", 100, false), None)
+                .unwrap();
+        }
+        let archive = super::Archive::open_with_key(&path, &key).unwrap();
+        assert_eq!(archive.messages(chat, None, 10).unwrap().len(), 1);
+    }
+
+    #[cfg(feature = "ssh")]
+    #[test]
+    fn wrong_supplied_key_preserves_archive_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("archive.db");
+        let key = [47; 32];
+        let archive = super::Archive::open_with_key(&path, &key).unwrap();
+        archive.ensure_chat("1@s.whatsapp.net", "Fixture").unwrap();
+        drop(archive);
+        let before = std::fs::read(&path).unwrap();
+        assert!(super::Archive::open_with_key(&path, &[48; 32]).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
     pub(crate) fn set_derived_update_failure(archive: &super::Archive, fail: bool) {
         archive.connection.execute_batch(if fail {
             "CREATE TRIGGER reject_derived_update BEFORE UPDATE OF content ON messages BEGIN SELECT RAISE(ABORT, 'fixture failure'); END;"
@@ -4167,7 +4207,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_chat_keeps_its_own_notification_sound() {
-        use crate::settings::NotificationSound;
+        use crate::notification_sound::NotificationSound;
         let archive = Archive::in_memory().unwrap();
         let id = "1@s.whatsapp.net";
         archive.ensure_chat(id, "Ada").unwrap();
@@ -5241,7 +5281,7 @@ mod sticker_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod media_path_tests {
     use super::*;
     use crate::model::{Content, Delivery, Media, MediaState};
