@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 /// Chat JID string: `<phone>@s.whatsapp.net`, `<id>@g.us`, or `<id>@lid`.
 pub type ChatId = String;
 
+/// Stable id for a staged attachment.
+pub type AttachmentId = u64;
+
 /// Stable folder name for a linked WhatsApp account on this computer.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AccountId(pub String);
@@ -190,6 +193,7 @@ impl ChatFilter {
         Self::Channels,
     ];
 
+    #[cfg(feature = "desktop")]
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::gettext;
         match self {
@@ -227,6 +231,7 @@ pub enum CallFilter {
 impl CallFilter {
     pub const EVERY: [Self; 2] = [Self::All, Self::Missed];
 
+    #[cfg(feature = "desktop")]
     pub fn label(self, locale: crate::i18n::Locale) -> std::borrow::Cow<'static, str> {
         use crate::i18n::gettext;
         match self {
@@ -305,7 +310,7 @@ pub struct Chat {
     /// Labels worn by this chat, in creation order. Local to this computer.
     pub labels: Vec<String>,
     /// This chat's own notification sound; `None` follows Settings.
-    pub notification_sound: Option<crate::settings::NotificationSound>,
+    pub notification_sound: Option<crate::notification_sound::NotificationSound>,
     /// The oldest unread message that mentions us (or everyone), which the
     /// chat list marks with "@" and opening the chat shows.
     pub unread_mention: Option<String>,
@@ -411,7 +416,7 @@ impl Chat {
         self.is_group()
             && self.can_send()
             && !self.participants.is_empty()
-            && (self.participants.len() <= crate::mentions::OPEN_LIMIT || self.admin)
+            && (self.participants.len() <= 32 || self.admin)
     }
 
     /// Whether the member list names any of `ours`.
@@ -571,6 +576,7 @@ impl ChatMedia {
     /// Files `rows` under their tabs, newest first, each list cut at
     /// `limit`. Stickers, audio, deleted and phone-only messages, and text
     /// without a web link are left out.
+    #[cfg(feature = "desktop")]
     pub fn collect(chat: ChatId, mut rows: Vec<Message>, limit: usize) -> Self {
         rows.sort_by_key(|row| std::cmp::Reverse(row.timestamp));
         let mut media = Self {
@@ -1143,6 +1149,7 @@ impl Content {
 
     /// The web addresses in a text message: the preview's, with its title,
     /// then the others written in the text, each once.
+    #[cfg(feature = "desktop")]
     pub fn web_links(&self) -> Vec<(String, Option<String>)> {
         let Self::Text { text, preview } = self else {
             return Vec::new();
@@ -1171,6 +1178,7 @@ impl Content {
 
     /// Whether the info panel lists this message: a picture, a video, a
     /// document, or text with a web link.
+    #[cfg(feature = "desktop")]
     pub fn listable(&self) -> bool {
         match self {
             Self::Image { .. } | Self::Video { .. } | Self::Document { .. } => true,
@@ -1199,7 +1207,10 @@ impl Content {
                     "Audio"
                 };
                 match seconds {
-                    Some(seconds) => format!("{label} ({})", crate::util::duration(*seconds)),
+                    Some(seconds) => format!(
+                        "{label} ({})",
+                        format!("{}:{:02}", seconds / 60, seconds % 60)
+                    ),
                     None => label.to_owned(),
                 }
             }
@@ -1254,7 +1265,7 @@ impl Content {
                     format!(
                         "{label} ({})",
                         // Summaries are English, as every other one is.
-                        crate::util::call_length(crate::i18n::Locale::English, *duration)
+                        call_length_english(*duration)
                     )
                 } else {
                     label.to_owned()
@@ -1859,7 +1870,7 @@ pub enum PictureSource {
 pub struct PictureEdit {
     /// The staged attachment it replaces, named rather than numbered, so that
     /// removing another attachment cannot point it at a different picture.
-    pub target: crate::app::AttachmentId,
+    pub target: AttachmentId,
     pub source: PictureSource,
     /// The source picture's own size, before any turn.
     pub width: u32,
@@ -1871,12 +1882,7 @@ pub struct PictureEdit {
 
 impl PictureEdit {
     /// A whole, unturned picture from a staged attachment.
-    pub fn new(
-        target: crate::app::AttachmentId,
-        source: PictureSource,
-        width: u32,
-        height: u32,
-    ) -> Self {
+    pub fn new(target: AttachmentId, source: PictureSource, width: u32, height: u32) -> Self {
         Self {
             target,
             source,
@@ -2222,6 +2228,7 @@ pub fn forward_limit(frequently_forwarded: bool) -> usize {
 }
 
 /// Actions queued by views and applied after drawing.
+#[cfg(feature = "desktop")]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Open(Page),
@@ -2849,7 +2856,7 @@ pub enum Action {
     /// Removes one pending attachment.
     RemovePending(usize),
     /// Opens the cropper on a staged picture.
-    EditPicture(crate::app::AttachmentId),
+    EditPicture(AttachmentId),
     /// Keeps the crop and the turn, replacing the staged picture.
     ApplyPictureEdit,
     /// Closes the cropper, leaving the staged picture as it was.
@@ -2858,7 +2865,7 @@ pub enum Action {
     ClearPending,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod storage_tests {
     use super::StorageStats;
 
@@ -2920,7 +2927,7 @@ mod storage_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     /// Checks compatibility with older archived quotes that omitted a source chat.
     #[test]
@@ -3816,5 +3823,16 @@ mod tests {
         assert_eq!(listed.links.len(), MEDIA_LIST_LIMIT, "cut to what is shown");
         assert!(listed.links_truncated, "600 addresses do not fit");
         assert!(!listed.media_truncated && !listed.docs_truncated);
+    }
+}
+
+fn call_length_english(seconds: u64) -> String {
+    let (hours, minutes, seconds) = (seconds / 3600, seconds % 3600 / 60, seconds % 60);
+    match (hours, minutes, seconds) {
+        (0, 0, _) => format!("{seconds} s"),
+        (0, _, 0) => format!("{minutes} min"),
+        (0, _, _) => format!("{minutes} min {seconds} s"),
+        (_, 0, _) => format!("{hours} h"),
+        _ => format!("{hours} h {minutes} min"),
     }
 }

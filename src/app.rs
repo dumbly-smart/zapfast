@@ -905,7 +905,7 @@ pub enum Pending {
 /// staged and never changes afterwards, so work that finishes later can say
 /// which attachment it belongs to instead of which place in the strip it sat
 /// in when the work started.
-pub type AttachmentId = u64;
+pub use crate::model::AttachmentId;
 
 /// One attachment in the strip, with the identity it keeps while it is staged.
 pub struct Staged {

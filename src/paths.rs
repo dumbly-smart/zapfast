@@ -51,6 +51,7 @@ impl AppDirs {
 
     /// Adopts earlier names, newest first, without replacing existing data.
     /// Call only after acquiring the instance guard, and never for demo runs.
+    #[cfg(feature = "desktop")]
     pub fn adopt_previous_names(&self) -> std::io::Result<()> {
         for name in ["fastsapp", "fastwhatsapp"] {
             if let Some(old) = Self::of(name) {
@@ -65,6 +66,7 @@ impl AppDirs {
         Ok(())
     }
 
+    #[cfg(feature = "desktop")]
     fn adopt(&self, old: &Self) -> std::io::Result<()> {
         for (from, to) in [
             (&old.config, &self.config),
@@ -127,6 +129,7 @@ impl AppDirs {
     /// back. SQLite's side files move before their database, so an
     /// interrupted move is finished by the next start rather than leaving a
     /// write-ahead log behind.
+    #[cfg(feature = "desktop")]
     pub fn adopt_single_account(&self) -> std::io::Result<()> {
         self.adopt_single_account_with(|from, to| {
             crate::archive::copy_archive_key(from, to)
@@ -134,6 +137,7 @@ impl AppDirs {
         })
     }
 
+    #[cfg(feature = "desktop")]
     fn adopt_single_account_with(
         &self,
         copy_key: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
@@ -171,6 +175,7 @@ impl AppDirs {
         Ok(())
     }
 
+    #[cfg(feature = "desktop")]
     fn adopt_databases(
         &self,
         dest: &AccountDirs,
@@ -359,6 +364,7 @@ impl AccountDirs {
     }
 }
 
+#[cfg(feature = "desktop")]
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
     if from.exists() && !to.try_exists()? {
         if let Some(parent) = to.parent() {
@@ -405,6 +411,7 @@ fn runtime_dir(project: &ProjectDirs, state: &Path) -> PathBuf {
 
 /// Rename whole directories so SQLite databases travel with their WAL files.
 /// A failed move stops startup before empty replacement directories are made.
+#[cfg(feature = "desktop")]
 fn adopt_directory(from: &Path, to: &Path) -> std::io::Result<()> {
     if from.is_dir() && !to.try_exists()? {
         if let Some(parent) = to.parent() {
@@ -415,7 +422,7 @@ fn adopt_directory(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use super::*;
 

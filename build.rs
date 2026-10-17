@@ -2,9 +2,10 @@
 //! Windows executables.
 
 fn main() {
+    #[cfg(feature = "desktop")]
     fastframe_i18n::build::compile_catalogs("assets/i18n");
 
-    #[cfg(windows)]
+    #[cfg(all(windows, feature = "desktop"))]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         println!("cargo:rerun-if-changed=packaging/windows/zapfast.ico");
         let mut resource = winresource::WindowsResource::new();
