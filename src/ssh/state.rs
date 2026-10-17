@@ -13,6 +13,11 @@ pub enum InputAction {
     Back,
     OlderPage,
     Search(String),
+    BeginSearch,
+    BeginCompose,
+    EndSearch,
+    CancelInput,
+    ToggleHelp,
     Compose(String),
     SelectMessage(usize),
     QuoteSelected,
@@ -39,6 +44,9 @@ pub struct SshState {
     pub search_results: Vec<Message>,
     pub history_complete: bool,
     pub quit: bool,
+    pub search_active: bool,
+    pub compose_active: bool,
+    pub show_help: bool,
     older_loading: bool,
     phone_history_requested: bool,
     local_history_exhausted: bool,
@@ -63,6 +71,9 @@ impl SshState {
             search_results: Vec::new(),
             history_complete: false,
             quit: false,
+            search_active: false,
+            compose_active: false,
+            show_help: false,
             older_loading: false,
             phone_history_requested: false,
             local_history_exhausted: false,
@@ -198,6 +209,32 @@ impl SshState {
             InputAction::Back => {
                 self.selected_message = None;
                 self.quoting = None;
+                self.search_query.clear();
+                self.search_results.clear();
+                self.refusal = None;
+                Vec::new()
+            }
+            InputAction::BeginSearch => {
+                self.search_active = true;
+                self.compose_active = false;
+                Vec::new()
+            }
+            InputAction::BeginCompose => {
+                self.compose_active = true;
+                self.search_active = false;
+                Vec::new()
+            }
+            InputAction::EndSearch => {
+                self.search_active = false;
+                Vec::new()
+            }
+            InputAction::CancelInput => {
+                self.search_active = false;
+                self.compose_active = false;
+                Vec::new()
+            }
+            InputAction::ToggleHelp => {
+                self.show_help = !self.show_help;
                 Vec::new()
             }
             InputAction::OlderPage => {
@@ -237,19 +274,33 @@ impl SshState {
             InputAction::Compose(text) => {
                 self.draft = text;
                 self.refusal = None;
+                self.compose_active = true;
                 Vec::new()
             }
             InputAction::SelectMessage(index) => {
-                self.selected_message = self.messages.get(index).map(|message| message.id.clone());
+                self.selected_message = self
+                    .active_messages()
+                    .get(index)
+                    .map(|message| message.id.clone());
                 Vec::new()
             }
             InputAction::QuoteSelected => {
-                self.quoting = (self.to.id == self.from.id)
-                    .then(|| self.selected_message.as_deref().map(ReplyTarget::from))
-                    .flatten();
+                self.refusal = None;
+                if self.to.id != self.from.id {
+                    self.quoting = None;
+                    self.refusal = Some(
+                        "Replies can quote messages only when --to and --from are the same chat."
+                            .into(),
+                    );
+                } else if let Some(id) = self.selected_message.as_deref() {
+                    self.quoting = Some(ReplyTarget::from(id));
+                } else {
+                    self.refusal = Some("Select a message with j/k before pressing r.".into());
+                }
                 Vec::new()
             }
             InputAction::Send => {
+                self.compose_active = false;
                 if self.draft.trim().is_empty() {
                     return Vec::new();
                 }
@@ -277,6 +328,14 @@ impl SshState {
                     || chat.id.to_lowercase().contains(&query)
             })
             .collect()
+    }
+
+    pub fn active_messages(&self) -> &[Message] {
+        if self.search_query.is_empty() {
+            &self.messages
+        } else {
+            &self.search_results
+        }
     }
 
     fn selected_chat_id(&self) -> Option<&str> {

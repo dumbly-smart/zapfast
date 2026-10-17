@@ -136,11 +136,19 @@ impl Default for InputMode {
 
 impl KeyInput {
     pub fn handle(&mut self, key: KeyEvent, state: &SshState) -> Vec<InputAction> {
+        if state.show_help {
+            return match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Enter => {
+                    vec![InputAction::ToggleHelp]
+                }
+                _ => vec![],
+            };
+        }
         if key.code == KeyCode::Esc {
             if self.mode != InputMode::Browse {
                 self.mode = InputMode::Browse;
                 self.buffer.clear();
-                return vec![];
+                return vec![InputAction::CancelInput];
             }
             return vec![InputAction::Back];
         }
@@ -148,7 +156,10 @@ impl KeyInput {
             match key.code {
                 KeyCode::Enter if self.mode == InputMode::Search => {
                     self.mode = InputMode::Browse;
-                    return vec![InputAction::Search(self.buffer.clone())];
+                    return vec![
+                        InputAction::Search(self.buffer.clone()),
+                        InputAction::EndSearch,
+                    ];
                 }
                 KeyCode::Enter => {
                     let draft = std::mem::take(&mut self.buffer);
@@ -157,7 +168,11 @@ impl KeyInput {
                 }
                 KeyCode::Backspace => {
                     self.buffer.pop();
-                    return vec![InputAction::Compose(self.buffer.clone())];
+                    return vec![if self.mode == InputMode::Compose {
+                        InputAction::Compose(self.buffer.clone())
+                    } else {
+                        InputAction::Search(self.buffer.clone())
+                    }];
                 }
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.buffer.push(c);
@@ -172,34 +187,45 @@ impl KeyInput {
         }
         match key.code {
             KeyCode::Char('q') => vec![InputAction::Quit],
+            KeyCode::Char('?') => vec![InputAction::ToggleHelp],
             KeyCode::Char('/') => {
                 self.mode = InputMode::Search;
                 self.buffer.clear();
-                vec![]
+                vec![InputAction::BeginSearch]
             }
             KeyCode::Char('i') => {
                 self.mode = InputMode::Compose;
                 self.buffer = state.draft.clone();
-                vec![]
+                vec![InputAction::BeginCompose]
             }
             KeyCode::Char('r') => vec![InputAction::QuoteSelected],
             KeyCode::Up | KeyCode::Char('k') if state.open_chat.is_some() => {
                 let current = state
                     .selected_message
                     .as_ref()
-                    .and_then(|id| state.messages.iter().position(|message| &message.id == id))
+                    .and_then(|id| {
+                        state
+                            .active_messages()
+                            .iter()
+                            .position(|message| &message.id == id)
+                    })
                     .unwrap_or(0);
-                vec![InputAction::SelectMessage(current.saturating_sub(1))]
+                vec![InputAction::SelectMessage(
+                    (current + 1).min(state.active_messages().len().saturating_sub(1)),
+                )]
             }
             KeyCode::Down | KeyCode::Char('j') if state.open_chat.is_some() => {
                 let current = state
                     .selected_message
                     .as_ref()
-                    .and_then(|id| state.messages.iter().position(|message| &message.id == id))
+                    .and_then(|id| {
+                        state
+                            .active_messages()
+                            .iter()
+                            .position(|message| &message.id == id)
+                    })
                     .unwrap_or(0);
-                vec![InputAction::SelectMessage(
-                    (current + 1).min(state.messages.len().saturating_sub(1)),
-                )]
+                vec![InputAction::SelectMessage(current.saturating_sub(1))]
             }
             KeyCode::Up | KeyCode::Char('k') => vec![InputAction::SelectChat(
                 state.selected_chat.saturating_sub(1),
