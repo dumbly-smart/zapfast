@@ -51,8 +51,13 @@ pub fn draw(frame: &mut Frame, state: &SshState) {
         ])
         .split(area);
     draw_header(frame, state, sections[0]);
-    draw_conversation(frame, state, sections[1]);
-    draw_footer(frame, state, sections[2]);
+    if state.browse_mode && state.open_chat.is_none() {
+        draw_chat_browser(frame, state, sections[1]);
+        draw_browser_footer(frame, sections[2]);
+    } else {
+        draw_conversation(frame, state, sections[1]);
+        draw_footer(frame, state, sections[2]);
+    }
     if state.show_help {
         draw_help(frame, area);
     }
@@ -72,6 +77,19 @@ fn draw_header(frame: &mut Frame, state: &SshState, area: Rect) {
         Span::styled("  /  SSH", Style::default().fg(MUTED)),
         Span::styled(format!("    ● {status}"), Style::default().fg(color).bold()),
     ])];
+    if state.browse_mode && state.open_chat.is_none() {
+        if area.height > 1 {
+            lines.push(Line::from(vec![
+                Span::styled("  CHATS  ", Style::default().fg(ACCENT).bold()),
+                Span::styled("Select a conversation", Style::default().fg(MUTED)),
+            ]));
+        }
+        frame.render_widget(
+            Paragraph::new(lines).style(Style::default().bg(PANEL)),
+            area,
+        );
+        return;
+    }
     if area.height > 1 && area.width < 65 && area.height > 2 {
         let name_width = area.width.saturating_sub(12) as usize;
         lines.push(Line::from(vec![
@@ -130,6 +148,135 @@ fn draw_header(frame: &mut Frame, state: &SshState, area: Rect) {
     }
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(PANEL)),
+        area,
+    );
+}
+
+fn draw_chat_browser(frame: &mut Frame, state: &SshState, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let visible_height = area.height.saturating_sub(2) as usize;
+    let chats = state.visible_chats();
+    let selected_id = state
+        .chats
+        .get(state.selected_chat)
+        .map(|chat| chat.id.as_str());
+    let selected = chats
+        .iter()
+        .position(|chat| Some(chat.id.as_str()) == selected_id)
+        .unwrap_or(0);
+    let start = if visible_height == 0 {
+        0
+    } else {
+        selected
+            .saturating_sub(visible_height / 2)
+            .min(chats.len().saturating_sub(visible_height))
+    };
+    let end = (start + visible_height).min(chats.len());
+    let name_width = area.width.saturating_sub(24).max(1) as usize;
+    let lines = if chats.is_empty() {
+        vec![Line::from(Span::styled(
+            if !state.search_query.is_empty() {
+                "No matching chats"
+            } else if state.chats_exhausted {
+                "No chats found"
+            } else {
+                "Loading your chats…"
+            },
+            Style::default().fg(MUTED),
+        ))]
+    } else {
+        chats[start..end]
+            .iter()
+            .enumerate()
+            .map(|(relative, chat)| {
+                let index = start + relative;
+                let active = index == selected;
+                let marker = if active { "›" } else { " " };
+                let kind = if chat.kind == crate::model::ChatKind::Group {
+                    "GROUP"
+                } else {
+                    "CHAT"
+                };
+                let title = shorten(&chat.name, name_width);
+                let style = if active {
+                    Style::default().fg(BACKGROUND).bg(ACCENT).bold()
+                } else {
+                    Style::default().fg(TEXT)
+                };
+                Line::from(vec![
+                    Span::styled(format!(" {marker} "), style),
+                    Span::styled(format!("{title:<width$}", width = name_width), style),
+                    Span::styled(
+                        format!("  {kind}  "),
+                        if active {
+                            style
+                        } else {
+                            Style::default().fg(MUTED)
+                        },
+                    ),
+                    Span::styled(
+                        format!("{:>4}", chat.unread),
+                        if chat.unread > 0 {
+                            Style::default().fg(ACCENT).bold()
+                        } else {
+                            Style::default().fg(MUTED)
+                        },
+                    ),
+                    Span::styled(" ", style),
+                ])
+            })
+            .collect()
+    };
+    let loaded = state.chats.len();
+    let title = if state.chats_exhausted {
+        format!(" CHATS  ·  {loaded} loaded ")
+    } else {
+        format!(" CHATS  ·  {loaded} loaded  ·  scroll for more ")
+    };
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(ACCENT))
+                .style(Style::default().bg(BACKGROUND).fg(TEXT)),
+        ),
+        area,
+    );
+}
+
+fn draw_browser_footer(frame: &mut Frame, area: Rect) {
+    if area.height == 0 {
+        return;
+    }
+    let lines = vec![
+        Line::from(vec![
+            Span::styled(" ↑/↓ ", Style::default().fg(ACCENT).bold()),
+            Span::styled("move   ", Style::default().fg(MUTED)),
+            Span::styled("Enter ", Style::default().fg(ACCENT).bold()),
+            Span::styled("open   ", Style::default().fg(MUTED)),
+            Span::styled("/ ", Style::default().fg(ACCENT).bold()),
+            Span::styled("find   ", Style::default().fg(MUTED)),
+            Span::styled("wheel ", Style::default().fg(ACCENT).bold()),
+            Span::styled("load more   ", Style::default().fg(MUTED)),
+            Span::styled("q ", Style::default().fg(ACCENT).bold()),
+            Span::styled("quit", Style::default().fg(MUTED)),
+        ]),
+        Line::from(Span::styled(
+            " Your archive stays encrypted on this machine.",
+            Style::default().fg(MUTED),
+        )),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" CHAT PICKER ")
+                .border_style(Style::default().fg(MUTED))
+                .style(Style::default().bg(PANEL)),
+        ),
         area,
     );
 }

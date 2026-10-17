@@ -56,7 +56,11 @@ pub enum LinkStatus {
 pub enum Event {
     Link(LinkStatus),
     PairingQr(String),
-    Chats(Vec<Chat>),
+    Chats {
+        offset: usize,
+        chats: Vec<Chat>,
+    },
+    ChatUpdated(Chat),
     ChatMessages {
         chat: String,
         before: Option<(i64, String)>,
@@ -80,7 +84,10 @@ pub enum Event {
 }
 
 pub enum Command {
-    LoadChats,
+    LoadChats {
+        offset: usize,
+        limit: usize,
+    },
     LoadChat {
         chat: String,
         before: Option<(i64, String)>,
@@ -230,15 +237,6 @@ async fn run(
         }
     };
     drop(key);
-    match archive.chats() {
-        Ok(chats) => emit(&events, &wake, Event::Chats(chats)),
-        Err(error) => emit(
-            &events,
-            &wake,
-            Event::Link(LinkStatus::Error(error.to_string())),
-        ),
-    }
-
     let store = match SqliteStore::open(&dirs.session_db().to_string_lossy()).await {
         Ok(store) => store,
         Err(error) => {
@@ -295,8 +293,8 @@ async fn process_command(
     wake: &BackendWake,
 ) {
     match command {
-        Command::LoadChats => match archive.chat(&filter.from) {
-            Ok(chat) => emit(events, wake, Event::Chats(chat.into_iter().collect())),
+        Command::LoadChats { offset, limit } => match archive.chats_page(offset, limit) {
+            Ok(chats) => emit(events, wake, Event::Chats { offset, chats }),
             Err(error) => emit(
                 events,
                 wake,
@@ -314,7 +312,7 @@ async fn process_command(
                 .map(|(timestamp, id)| (*timestamp, id.as_str())),
             limit,
         ) {
-            Ok(messages) if chat == filter.from => emit(
+            Ok(messages) if filter.from.is_empty() || chat == filter.from => emit(
                 events,
                 wake,
                 Event::ChatMessages {
@@ -335,7 +333,7 @@ async fn process_command(
             id,
             from_me,
             timestamp,
-        } if chat == filter.from => match chat.parse::<Jid>() {
+        } if filter.from.is_empty() || chat == filter.from => match chat.parse::<Jid>() {
             Ok(jid) => {
                 if let Err(error) = client
                     .fetch_message_history(&jid, &id, from_me, timestamp, 50)
@@ -356,7 +354,7 @@ async fn process_command(
                 Event::Link(LinkStatus::Error(error.to_string())),
             ),
         },
-        Command::Search { chat, query } if chat == filter.from => {
+        Command::Search { chat, query } if filter.from.is_empty() || chat == filter.from => {
             match archive.search_chat_messages(&chat, &query, None, None, 100) {
                 Ok(messages) => emit(events, wake, Event::SearchResults { query, messages }),
                 Err(error) => emit(
@@ -366,7 +364,7 @@ async fn process_command(
                 ),
             }
         }
-        Command::MarkRead { chat } if chat == filter.from => {
+        Command::MarkRead { chat } if filter.from.is_empty() || chat == filter.from => {
             if let Err(error) = archive.mark_read(&chat) {
                 emit(
                     events,
@@ -379,7 +377,7 @@ async fn process_command(
             chat,
             text,
             quoting,
-        } if chat == filter.to => {
+        } if filter.to.is_empty() || chat == filter.to => {
             if text.trim().is_empty() {
                 return;
             }
@@ -509,7 +507,7 @@ fn process_wa_event(
         WaEvent::HistorySync(sync) => {
             if let Some(sync) = sync.get() {
                 for conversation in &sync.conversations {
-                    if conversation.id == filter.from {
+                    if filter.from.is_empty() || conversation.id == filter.from {
                         store_history_conversation(conversation, filter, archive, events, wake);
                     }
                 }
@@ -517,7 +515,7 @@ fn process_wa_event(
                     && sync.progress == Some(100)
                 {
                     for conversation in &sync.conversations {
-                        if conversation.id != filter.from {
+                        if !filter.from.is_empty() && conversation.id != filter.from {
                             continue;
                         }
                         emit(
@@ -584,10 +582,11 @@ fn process_wa_event(
                     );
                     continue;
                 }
+                emit_selected_chat(archive, &chat, events, wake);
                 if !row.from_me {
                     let _ = archive.bump_unread(&chat);
                 }
-                if row.chat == filter.from {
+                if filter.from.is_empty() || row.chat == filter.from {
                     emit(events, wake, Event::Message(row));
                 }
             }
@@ -605,7 +604,7 @@ fn store_history_conversation(
     wake: &BackendWake,
 ) {
     let chat = conversation.id.as_str();
-    if chat != filter.from {
+    if !filter.from.is_empty() && chat != filter.from {
         return;
     }
     let name = conversation
@@ -688,6 +687,7 @@ fn store_history_conversation(
         let _ = archive.touch_activity(chat, timestamp);
         emit(events, wake, Event::Message(row));
     }
+    emit_selected_chat(archive, chat, events, wake);
 }
 
 fn emit_selected_chat(
@@ -697,15 +697,15 @@ fn emit_selected_chat(
     wake: &BackendWake,
 ) {
     if let Ok(Some(chat)) = archive.chat(id) {
-        emit(events, wake, Event::Chats(vec![chat]));
+        emit(events, wake, Event::ChatUpdated(chat));
     }
 }
 
 fn accept_live_chat(filter: &DirectFilter, chat: &str, from_me: bool) -> bool {
     if from_me {
-        chat == filter.to
+        filter.to.is_empty() || chat == filter.to
     } else {
-        chat == filter.from
+        filter.from.is_empty() || chat == filter.from
     }
 }
 
@@ -926,7 +926,7 @@ mod tests {
         let (events, received) = std::sync::mpsc::channel();
         emit_selected_chat(&archive, "selected@g.us", &events, &BackendWake::new(|| {}));
         assert!(
-            matches!(received.recv().unwrap(), Event::Chats(chats) if chats.len() == 1 && chats[0].id == "selected@g.us")
+            matches!(received.recv().unwrap(), Event::ChatUpdated(chat) if chat.id == "selected@g.us")
         );
     }
 }

@@ -97,8 +97,7 @@ impl SessionBackend for LiveBackend {
 pub fn run(
     profile: Profile,
     passphrase: Zeroizing<String>,
-    to: selector::ChatSelector,
-    from: selector::ChatSelector,
+    selectors: Option<(selector::ChatSelector, selector::ChatSelector)>,
 ) -> anyhow::Result<()> {
     let _lock = profile.acquire()?;
     let dirs = profile.account_dirs();
@@ -108,8 +107,11 @@ pub fn run(
         &passphrase,
     )?;
     let archive = crate::archive::Archive::open_with_key(&dirs.archive_db(), &key)?;
-    let to = to.resolve(&archive)?;
-    let from = from.resolve(&archive)?;
+    let selectors = selectors
+        .map(|(to, from)| -> anyhow::Result<_> {
+            Ok((to.resolve(&archive)?, from.resolve(&archive)?))
+        })
+        .transpose()?;
     drop(passphrase);
     let mut terminal = TerminalGuard::enter()?;
     let (wake_tx, wake_rx) = mpsc::channel();
@@ -129,8 +131,7 @@ pub fn run(
         dirs,
         wake,
         key,
-        to,
-        from,
+        selectors,
         &wake_rx,
         &mut terminal,
     );
@@ -167,6 +168,11 @@ fn spawn_terminal_reader(
                                 return;
                             }
                         }
+                        Ok(event @ CrosstermEvent::Mouse(_)) => {
+                            if tx.send(Wake::Terminal(event)).is_err() {
+                                return;
+                            }
+                        }
                         Ok(_) => {}
                         Err(_) => {
                             let _ = tx.send(Wake::InputError);
@@ -189,13 +195,15 @@ fn drive_session<B: SessionBackend>(
     dirs: crate::paths::AccountDirs,
     wake: BackendWake,
     key: Zeroizing<[u8; 32]>,
-    to: selector::ResolvedChat,
-    from: selector::ResolvedChat,
+    selectors: Option<(selector::ResolvedChat, selector::ResolvedChat)>,
     wake_rx: &mpsc::Receiver<Wake>,
     terminal: &mut TerminalGuard,
 ) -> anyhow::Result<()> {
     let outcome = with_backend_shutdown(backend, |backend| {
-        let mut state = SshState::new(to, from);
+        let mut state = match selectors {
+            Some((to, from)) => SshState::new(to, from),
+            None => SshState::browse(),
+        };
         let filter = DirectFilter {
             to: state.to.id.clone(),
             from: state.from.id.clone(),
@@ -218,6 +226,23 @@ fn drive_session<B: SessionBackend>(
                         let commands = state.act(action);
                         for command in commands {
                             backend.send(command)?;
+                        }
+                    }
+                }
+                Wake::Terminal(CrosstermEvent::Mouse(mouse)) => {
+                    if state.open_chat.is_none() {
+                        use crossterm::event::MouseEventKind;
+                        let delta = match mouse.kind {
+                            MouseEventKind::ScrollDown => 3,
+                            MouseEventKind::ScrollUp => -3,
+                            _ => 0,
+                        };
+                        if delta != 0 {
+                            for command in
+                                state.act(crate::ssh::state::InputAction::ScrollChats(delta))
+                            {
+                                backend.send(command)?;
+                            }
                         }
                     }
                 }
@@ -282,7 +307,7 @@ mod tests {
             Ok(())
         }
         fn send(&mut self, command: Command) -> anyhow::Result<()> {
-            if matches!(command, Command::LoadChats) {
+            if matches!(command, Command::LoadChats { .. }) {
                 self.sends.set(self.sends.get() + 1);
             }
             Ok(())
@@ -318,7 +343,12 @@ mod tests {
                 },
             )
             .unwrap();
-        backend.send(Command::LoadChats).unwrap();
+        backend
+            .send(Command::LoadChats {
+                offset: 0,
+                limit: 10,
+            })
+            .unwrap();
         assert_eq!(backend.starts.get(), 1);
         assert_eq!(backend.sends.get(), 1);
         backend.shutdown();

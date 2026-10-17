@@ -3,7 +3,7 @@ use zapfast::ssh::selector::ChatSelector;
 
 fn parse_args(
     args: impl IntoIterator<Item = String>,
-) -> anyhow::Result<Option<(ChatSelector, ChatSelector)>> {
+) -> anyhow::Result<Option<Option<(ChatSelector, ChatSelector)>>> {
     let mut to = None;
     let mut from = None;
     let mut args = args.into_iter();
@@ -25,17 +25,19 @@ fn parse_args(
         *slot =
             Some(ChatSelector::parse(&value).with_context(|| format!("invalid value for {arg}"))?);
     }
-    Ok(Some((
-        to.context("--to is required")?,
-        from.context("--from is required")?,
-    )))
+    match (to, from) {
+        (None, None) => Ok(Some(None)),
+        (Some(to), Some(from)) => Ok(Some(Some((to, from)))),
+        (Some(_), None) => anyhow::bail!("--from is required when --to is supplied"),
+        (None, Some(_)) => anyhow::bail!("--to is required when --from is supplied"),
+    }
 }
 
 fn main() -> anyhow::Result<()> {
     let parsed = parse_args(std::env::args().skip(1))?;
-    let Some((to, from)) = parsed else {
+    let Some(parsed) = parsed else {
         println!(
-            "zapfast-ssh — headless WhatsApp client for SSH terminals\n\nUsage: ssh -t host zapfast-ssh --to <number|JID|name> --from <number|JID|name>\n\nThe archive passphrase is read interactively and is never accepted in arguments or environment variables."
+            "zapfast-ssh — headless WhatsApp client for SSH terminals\n\nUsage: ssh -t host zapfast-ssh [--to <number|JID|name> --from <number|JID|name>]\n\nWithout selectors, browse chats and open one with Enter. The archive passphrase is read interactively and is never accepted in arguments or environment variables."
         );
         return Ok(());
     };
@@ -44,7 +46,7 @@ fn main() -> anyhow::Result<()> {
     let passphrase = zapfast::ssh::terminal::read_passphrase()?;
     let profile = zapfast::ssh::profile::Profile::discover()
         .context("prepare the per-user ZapFast SSH profile")?;
-    zapfast::ssh::run(profile, passphrase, to, from)
+    zapfast::ssh::run(profile, passphrase, parsed)
 }
 
 #[cfg(test)]
@@ -58,10 +60,11 @@ mod tests {
         let parsed = parse_args(args(&["--to", "+14155550123", "--from", "Design Team"]))
             .unwrap()
             .unwrap();
-        assert_eq!(parsed.0, ChatSelector::parse("+14155550123").unwrap());
-        assert_eq!(parsed.1, ChatSelector::Name("Design Team".into()));
+        let (to, from) = parsed.unwrap();
+        assert_eq!(to, ChatSelector::parse("+14155550123").unwrap());
+        assert_eq!(from, ChatSelector::Name("Design Team".into()));
+        assert!(parse_args(args(&[])).unwrap().unwrap().is_none());
         for bad in [
-            &[][..],
             &["--to", "1"][..],
             &["--from", "2"][..],
             &["--to"][..],

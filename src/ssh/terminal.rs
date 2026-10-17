@@ -2,7 +2,10 @@ use std::io::{self, Stdout, Write};
 
 use anyhow::Context;
 use crossterm::{
-    event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -20,7 +23,7 @@ impl TerminalGuard {
     pub fn enter() -> anyhow::Result<Self> {
         enable_raw_mode().context("enable terminal raw mode")?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
             let _ = disable_raw_mode();
             return Err(error).context("enter alternate screen");
         }
@@ -106,7 +109,11 @@ fn restore<W: Write>(
 ) {
     let _ = terminal.show_cursor();
     if *alternate {
-        let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
         *alternate = false;
     }
     if *raw {
@@ -230,11 +237,16 @@ impl KeyInput {
             KeyCode::Up | KeyCode::Char('k') => vec![InputAction::SelectChat(
                 state.selected_chat.saturating_sub(1),
             )],
+            KeyCode::Down | KeyCode::Char('j') if state.open_chat.is_none() => {
+                vec![InputAction::ScrollChats(1)]
+            }
             KeyCode::Down | KeyCode::Char('j') => vec![InputAction::SelectChat(
                 state.selected_chat.saturating_add(1),
             )],
             KeyCode::Enter if state.open_chat.is_some() => vec![],
             KeyCode::Enter => vec![InputAction::OpenSelected],
+            KeyCode::PageUp if state.open_chat.is_none() => vec![InputAction::ScrollChats(-10)],
+            KeyCode::PageDown if state.open_chat.is_none() => vec![InputAction::ScrollChats(10)],
             KeyCode::PageUp => vec![InputAction::OlderPage],
             KeyCode::Backspace => vec![InputAction::Back],
             _ => vec![],
