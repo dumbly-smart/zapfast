@@ -196,14 +196,8 @@ impl SshState {
                 .unwrap_or_default(),
             InputAction::OpenChat(chat) => self.open(chat),
             InputAction::Back => {
-                self.open_chat = None;
-                self.messages.clear();
                 self.selected_message = None;
                 self.quoting = None;
-                self.history_complete = false;
-                self.older_loading = false;
-                self.phone_history_requested = false;
-                self.local_history_exhausted = false;
                 Vec::new()
             }
             InputAction::OlderPage => {
@@ -573,5 +567,12 @@ mod tests {
         assert!(
             matches!(commands.as_slice(), [Command::FetchOlder { chat, id: message, .. }] if chat == id && message == "oldest")
         );
+    }
+
+    #[test]
+    fn back_keeps_the_selected_conversation_open() {
+        let mut state = direct("to@s.whatsapp.net", "from@g.us");
+        state.act(InputAction::Back);
+        assert_eq!(state.open_chat.as_deref(), Some("from@g.us"));
     }
 }

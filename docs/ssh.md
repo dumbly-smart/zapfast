@@ -1,56 +1,93 @@
 # ZapFast over SSH
 
-`zapfast-ssh` is a small, headless Rust terminal client for the everyday text
-workflow: link WhatsApp, browse chats and local history, search archived text,
-and send or reply to messages. WhatsApp protocol work is handled by the pinned
-`whatsapp-rust` dependency. Media, calls, notifications, and desktop UI are not
-included in this binary.
+`zapfast-ssh` is a small, headless Rust terminal client for text conversations.
+Choose one chat to send to and one chat to receive from on the command line.
+It loads and searches only the receive chat, and keeps WhatsApp connected only
+while you stay logged in. It does not include the desktop window, media, calls,
+or a background service.
 
 ## Build and install
 
-Install the Rust toolchain and the native build prerequisites for the
-`whatsapp-rust` SQLite/OpenSSL stack. From a checkout of this repository:
+Build on the Linux server from a ZapFast checkout:
 
 ```sh
 cargo build --release --no-default-features --features ssh --bin zapfast-ssh
-install -m 0755 target/release/zapfast-ssh "$HOME/.local/bin/zapfast-ssh"
+install -Dm755 target/release/zapfast-ssh "$HOME/.local/bin/zapfast-ssh"
 ```
 
-On the server, ensure that directory is in the login user's `PATH`. Each Unix
-account gets a separate profile under `${XDG_STATE_HOME:-$HOME/.local/state}/zapfast-ssh/`.
-The directory is private to that user. A kernel lock prevents two sessions for
-the same Unix user from opening the profile at once.
+Make sure `$HOME/.local/bin` is in the server user's `PATH`. Each Unix login
+gets a private profile under `${XDG_STATE_HOME:-$HOME/.local/state}/zapfast-ssh/`.
+It contains that user's linked-device session, passphrase-wrapped archive key,
+and encrypted message archive. Only one SSH session per Unix user can use the
+profile at a time. Different Unix users have separate WhatsApp profiles.
 
-## Connect
+## Start a conversation
 
-Use normal SSH key authentication and allocate a terminal:
+Allocate a terminal and specify both destinations:
 
 ```sh
-ssh -t user@server zapfast-ssh
+ssh -t user@server zapfast-ssh --to +14155550123 --from +14155550123
 ```
 
-The client prompts for the archive passphrase without echo. It asks for this on
-each run. On first launch, use the pairing QR code from WhatsApp on your phone
-(Linked devices → Link a device). Keep the terminal open while using the client;
-logging out stops the connection. No ZapFast listener or background service is
-started.
+The first run asks for a new archive passphrase, then shows a pairing QR code.
+On your phone, open **WhatsApp → Settings → Linked devices → Link a device** and
+scan it. Keep the terminal open while chatting. Logging out or pressing `q`
+disconnects the client; the WhatsApp session stays linked for the next run.
 
-Use arrow keys or `j`/`k` to move through chats and messages, Enter to open a
-chat, `/` to search, `i` to compose, Enter to send, `r` to reply to the selected
-message, Page Up to request older history, Esc to go back, and `q` to quit.
-Older history depends on what WhatsApp makes available to linked devices.
+`--to` is where your messages go. `--from` is the one conversation whose
+incoming messages, local history, and search results are used. The local
+archive marks only `--from` as read.
+They can be different. For example, send messages to a group while watching a
+family chat:
 
-The profile contains the WhatsApp device session, encrypted SQLCipher archive,
-and `archive.key`, a passphrase-wrapped random archive key. Keep the passphrase
-safe; ZapFast does not upload it or message content. Back up the profile only
-while the client is stopped, and preserve all files together.
+```sh
+ssh -t user@server 'zapfast-ssh --to "Design Team" --from "Family"'
+```
 
-For a live link or message smoke check, use a dedicated test WhatsApp account.
-Never use a real user's archive as a test fixture.
+Each selector can be an international phone number with `+`, a WhatsApp JID,
+or an exact saved contact name or group subject from the SSH profile's local
+archive. A JID looks like `14155550123@s.whatsapp.net` for a direct chat or
+`120363012345678@g.us` for a group. When a selector contains spaces, quote
+the whole remote command so the remote shell preserves the name as one value.
+Names must match a locally saved contact or group subject; partial matches are
+not used. If a name is missing or matches more than one contact/group, the
+client reports the problem before entering the terminal. Use a phone number or
+JID to disambiguate. For a new SSH profile, start with numbers or JIDs; names
+become available after WhatsApp syncs the corresponding contact/group metadata.
+
+Group chats work as either `--to` or `--from`. When `--from` is a group, the
+transcript accepts messages from all its members and shows the member name when
+WhatsApp provides one. Sending still targets only `--to`.
+
+## Terminal controls
+
+- `i`: compose; Enter sends to `--to`
+- `/`: search messages in `--from`
+- `j` / `k` or Down / Up: move through the transcript
+- Page Up: load the next local page; after local history ends, Page Up requests
+  older WhatsApp history for `--from`
+- `r`: reply to the selected message when `--to` and `--from` are the same chat
+- Esc: leave the current input mode / clear message selection
+- `q`: quit and disconnect
+
+Older WhatsApp history depends on what the linked device can retrieve. The
+client does not load unrelated chats, search them, or mark them read in its
+local archive.
+
+## Passphrase and storage
+
+The archive passphrase is prompted without echo on every run. It is never
+accepted as a command-line argument or environment variable. Keep it safe: it
+protects the random key for the encrypted local archive. The archive and linked
+device session remain in the Unix user's private profile. Back up the profile
+only while the client is stopped, and preserve its files together. The SSH
+profile is separate from the desktop app's archive.
+
+For a live message smoke test, use a dedicated test WhatsApp account. Never
+copy a real user's archive into test fixtures.
 
 ## Build footprint
 
-On Linux x86_64, the release command above produced a 21,831,072-byte binary
-in this checkout. `ldd` reported only `libc`, `libm`, and `libgcc_s` (plus the
-system dynamic loader); the normal SSH dependency tree has no GUI, audio, video,
-or fastframe crates. The exact size can vary with the Rust toolchain and target.
+The SSH feature excludes the desktop UI, audio, video, calls, and fastframe
+desktop dependencies. The release binary size depends on the Rust toolchain,
+target, and linked system libraries.

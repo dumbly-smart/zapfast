@@ -86,11 +86,11 @@ details.
 
 ## Use ZapFast over SSH
 
-`zapfast-ssh` runs in your SSH terminal on a Linux server. It uses the same
-WhatsApp protocol library, but is a separate, headless text client: it can
-browse chats and saved history, search messages, and send or reply to text. It
-does not include the desktop window, media, or calls. It runs only while you
-are logged in; it does not start a server or background service.
+`zapfast-ssh` is a small headless text client for a Linux server. Choose a
+WhatsApp conversation to send to and one to receive from; it loads and searches
+only the selected receive chat. It supports direct chats and groups, and stays
+connected only while you are logged in. It does not include the desktop window,
+media, calls, or a background service.
 
 Build and install it **on the Linux server** from a ZapFast checkout:
 
@@ -103,7 +103,17 @@ Make sure `$HOME/.local/bin` is in that account's `PATH`, then connect from
 your computer with a terminal allocated:
 
 ```sh
-ssh -t your-user@your-server zapfast-ssh
+ssh -t your-user@your-server zapfast-ssh --to +14155550123 --from +14155550123
+```
+
+Selectors may be an international phone number, WhatsApp JID, or exact
+contact/group name saved in the SSH profile. On a new profile, use numbers or
+JIDs until WhatsApp syncs the local names. To send to one group while reading
+another chat, quote the complete remote command so the names stay single
+arguments:
+
+```sh
+ssh -t your-user@your-server 'zapfast-ssh --to "Design Team" --from "Family"'
 ```
 
 The client prompts for your archive passphrase without displaying it. You
@@ -112,11 +122,11 @@ WhatsApp on your phone: **Settings → Linked devices → Link a device**. If th
 terminal is too small to display the code, enlarge it; the QR display redraws
 when the terminal resizes.
 
-Use **↑/↓** or **j/k** to move through chats and messages, **Enter** to open a
-chat, **/** to search, **i** to compose, **Enter** to send, **r** to reply to
-the selected message, **Page Up** to request older history, **Esc** to go back,
-and **q** to quit. Older history depends on what WhatsApp provides to linked
-devices.
+Use **j/k** or **↑/↓** to move through the transcript, **/** to search only the
+`--from` chat, **i** to compose, and **Enter** to send to `--to`. **Page Up**
+loads older local history, then explicitly requests older WhatsApp history for
+`--from`. **r** replies when `--to` and `--from` are the same chat; **q** quits.
+Older history depends on what WhatsApp provides to linked devices.
 
 Each Unix login has a private profile on the server containing its WhatsApp
 session and encrypted local archive. Only one session per Unix user can run at
