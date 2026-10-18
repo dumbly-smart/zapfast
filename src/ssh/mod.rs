@@ -112,6 +112,14 @@ pub fn run(
             Ok((to.resolve(&archive)?, from.resolve(&archive)?))
         })
         .transpose()?;
+    // The archive is already open here. Draw a known-safe cached page before
+    // the backend opens its session store and connects to WhatsApp.
+    let initial_chats = if selectors.is_none() && archive.meta("ssh_archive_state_v1")?.is_some() {
+        Some(archive.chats_page(false, 0, state::CHAT_PAGE_SIZE)?)
+    } else {
+        None
+    };
+    drop(archive);
     drop(passphrase);
     let mut terminal = TerminalGuard::enter()?;
     let (wake_tx, wake_rx) = mpsc::channel();
@@ -132,6 +140,7 @@ pub fn run(
         wake,
         key,
         selectors,
+        initial_chats,
         &wake_rx,
         &mut terminal,
     );
@@ -196,6 +205,7 @@ fn drive_session<B: SessionBackend>(
     wake: BackendWake,
     key: Zeroizing<[u8; 32]>,
     selectors: Option<(selector::ResolvedChat, selector::ResolvedChat)>,
+    initial_chats: Option<Vec<crate::model::Chat>>,
     wake_rx: &mpsc::Receiver<Wake>,
     terminal: &mut TerminalGuard,
 ) -> anyhow::Result<()> {
@@ -204,6 +214,13 @@ fn drive_session<B: SessionBackend>(
             Some((to, from)) => SshState::new(to, from),
             None => SshState::browse(),
         };
+        if let Some(chats) = initial_chats {
+            state.apply(Event::Chats {
+                archived: false,
+                offset: 0,
+                chats,
+            });
+        }
         let filter = DirectFilter {
             to: state.to.id.clone(),
             from: state.from.id.clone(),
