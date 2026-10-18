@@ -599,6 +599,16 @@ impl Archive {
         self.set_archived_at(id, archived, jiff::Timestamp::now().as_millisecond())
     }
 
+    /// History has no archive-state timestamp, so it cannot replace a newer
+    /// app-state update from the phone.
+    pub fn set_archived_snapshot(&self, id: &str, archived: bool) -> Result<()> {
+        self.connection.execute(
+            "UPDATE chats SET archived = ?2 WHERE id = ?1 AND archive_updated_at IS NULL",
+            params![id, archived],
+        )?;
+        Ok(())
+    }
+
     /// Apply archive state in timestamp order, like pin and mute, so history
     /// arriving later cannot undo an archive change received from the phone.
     pub fn set_archived_at(&self, id: &str, archived: bool, timestamp: i64) -> Result<()> {

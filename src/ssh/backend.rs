@@ -14,6 +14,7 @@ use whatsapp_rust::prelude::{Bot, Jid, MessageBuilderExt, MessageExt, wa};
 use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust::types::events::{Event as WaEvent, EventHandler};
 use whatsapp_rust::waproto::buffa::Message as _;
+use whatsapp_rust::{AppStateResyncMode, WAPatchName};
 use zeroize::Zeroizing;
 
 use crate::archive::Archive;
@@ -250,7 +251,9 @@ async fn run(
             return;
         }
     };
-    let (handler, wa_events) = async_channel::bounded::<Arc<WaEvent>>(256);
+    // A full app-state replay may dispatch more than 256 mutations at once.
+    // Keep every event so archived chats cannot be classified from a partial replay.
+    let (handler, wa_events) = async_channel::unbounded::<Arc<WaEvent>>();
     let bot = match Bot::builder()
         .with_backend(store)
         .with_event_handler(ForwardEvents(handler))
@@ -269,17 +272,81 @@ async fn run(
     };
     let handle = bot.spawn();
     let client = handle.client();
+    let archive_repair_needed = filter.from.is_empty()
+        && archive
+            .meta("ssh_archive_state_v1")
+            .ok()
+            .flatten()
+            .is_none();
+    let mut archive_repair_pending = archive_repair_needed;
+    let mut archive_repair_started = false;
+    let mut deferred_chat_page = None;
+    let (repair_tx, mut repair_rx) = tokio_mpsc::unbounded_channel();
     let mut stop = false;
     while !stop {
         tokio::select! {
             command = commands.recv() => match command {
                 Some(Command::Shutdown) | None => stop = true,
+                Some(command @ Command::LoadChats { .. }) if archive_repair_pending => {
+                    deferred_chat_page = Some(command);
+                }
                 Some(command) => process_command(command, &filter, &archive, &client, &events, &wake).await,
             },
             event = wa_events.recv() => match event {
-                Ok(event) => process_wa_event(&event, &filter, &archive, &events, &wake),
+                Ok(event) => {
+                    if matches!(&*event, WaEvent::Connected(_))
+                        && archive_repair_pending
+                        && !archive_repair_started
+                    {
+                        archive_repair_started = true;
+                        let client = client.clone();
+                        let repair_tx = repair_tx.clone();
+                        tokio::spawn(async move {
+                            let result = client
+                                .resync_app_state(
+                                    [WAPatchName::RegularLow],
+                                    AppStateResyncMode::Snapshot,
+                                )
+                                .await;
+                            let _ = repair_tx.send(result);
+                        });
+                    }
+                    process_wa_event(&event, &filter, &archive, &events, &wake);
+                }
                 Err(_) => stop = true,
-            }
+            },
+            repair = repair_rx.recv(), if archive_repair_pending && archive_repair_started => {
+                // The protocol dispatches snapshot mutations before returning.
+                // Apply the queued events before opening the first chat page.
+                while let Ok(event) = wa_events.try_recv() {
+                    process_wa_event(&event, &filter, &archive, &events, &wake);
+                }
+                match repair {
+                    Some(Ok(report)) if report.all_synced() => {
+                        if let Err(error) = archive.set_meta("ssh_archive_state_v1", "done") {
+                            emit(&events, &wake, Event::Link(LinkStatus::Error(error.to_string())));
+                        }
+                        archive_repair_pending = false;
+                        if let Some(command) = deferred_chat_page.take() {
+                            process_command(command, &filter, &archive, &client, &events, &wake).await;
+                        }
+                    }
+                    Some(Ok(report)) => {
+                        archive_repair_started = false;
+                        emit(&events, &wake, Event::Link(LinkStatus::Error(format!(
+                            "Could not sync archived chats: {:?}",
+                            report.unsynced().collect::<Vec<_>>()
+                        ))));
+                    }
+                    Some(Err(error)) => {
+                        archive_repair_started = false;
+                        emit(&events, &wake, Event::Link(LinkStatus::Error(format!(
+                            "Could not sync archived chats: {error}"
+                        ))));
+                    }
+                    None => stop = true,
+                }
+            },
         }
     }
     drop(client);
@@ -518,6 +585,24 @@ fn process_wa_event(
         WaEvent::Connected(_) => emit(events, wake, Event::Link(LinkStatus::Connected)),
         WaEvent::Disconnected(_) => emit(events, wake, Event::Link(LinkStatus::Disconnected)),
         WaEvent::LoggedOut(_) => emit(events, wake, Event::Link(LinkStatus::LoggedOut)),
+        WaEvent::ArchiveUpdate(update) => {
+            let chat = update.jid.to_string();
+            let stored = archive.ensure_chat(&chat, &chat).and_then(|_| {
+                archive.set_archived_at(
+                    &chat,
+                    update.action.archived.unwrap_or(false),
+                    update.timestamp.timestamp_millis(),
+                )
+            });
+            match stored {
+                Ok(()) => emit_selected_chat(archive, &chat, events, wake),
+                Err(error) => emit(
+                    events,
+                    wake,
+                    Event::Link(LinkStatus::Error(error.to_string())),
+                ),
+            }
+        }
         WaEvent::HistorySync(sync) => {
             if let Some(sync) = sync.get() {
                 for conversation in &sync.conversations {
@@ -633,6 +718,16 @@ fn store_history_conversation(
             Event::Link(LinkStatus::Error(error.to_string())),
         );
         return;
+    }
+    if let Some(archived) = conversation.archived {
+        if let Err(error) = archive.set_archived_snapshot(chat, archived) {
+            emit(
+                events,
+                wake,
+                Event::Link(LinkStatus::Error(error.to_string())),
+            );
+            return;
+        }
     }
     if let Some(unread) = conversation.unread_count {
         let _ = archive.history_unread(chat, unread);
