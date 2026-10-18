@@ -21,7 +21,7 @@ fi
 
 printf '%s\n' 'Installing Termux build tools and the SSH service...'
 pkg update -y
-pkg install -y git rust clang make pkg-config openssl termux-services
+pkg install -y git rust clang make perl pkg-config openssl termux-services
 # Install OpenSSH after termux-services so its supervised service is registered.
 pkg install -y openssh
 

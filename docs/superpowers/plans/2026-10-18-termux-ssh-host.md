@@ -37,9 +37,9 @@
 - Consumes: the repository's `ssh` Cargo feature and `zapfast-ssh` binary target.
 - Produces: an executable shell script invoked from a ZapFast checkout inside Termux.
 
-- [ ] **Step 1: Add a guarded setup script.** Check `PREFIX` and Termux executable paths before running `pkg`; install `git`, `rust`, `clang`, `make`, `pkg-config`, `openssl`, and `termux-services`, then `openssh` so its service integration is present; build with `cargo build --release --locked --no-default-features --features ssh --bin zapfast-ssh`; install a completed binary atomically under `$PREFIX/bin/`, which is in Termux's SSH command path; start or enable Termux's `sshd` service without rewriting SSH configuration or keys. Explain any shell restart needed for `termux-services`.
-- [ ] **Step 2: Inspect the script with `sh -n` and `shellcheck`.** Confirm both accept it; do not execute package installation in this Linux workspace.
-- [ ] **Step 3: Commit the setup script.**
+- [x] **Step 1: Add a guarded setup script.** Check `PREFIX` and Termux executable paths before running `pkg`; install `git`, `rust`, `clang`, `make`, `perl`, `pkg-config`, `openssl`, and `termux-services`, then `openssh` so its service integration is present; build with `cargo build --release --locked --no-default-features --features ssh --bin zapfast-ssh`; install a completed binary atomically under `$PREFIX/bin/`, which is in Termux's SSH command path; start or enable Termux's `sshd` service without rewriting SSH configuration or keys. Explain any shell restart needed for `termux-services`.
+- [x] **Step 2: Inspect the script with `sh -n` and `shellcheck`.** Confirm both accept it; do not execute package installation in this Linux workspace.
+- [x] **Step 3: Commit the setup script.**
 
 ### Task 2: Phone-host guide
 
@@ -51,7 +51,7 @@
 - Consumes: `packaging/termux/setup.sh` from Task 1.
 - Produces: a complete same-Wi-Fi setup and usage guide, with optional private-network access.
 
-- [ ] **Step 1: Document phone setup and access.** Cover a supported Termux install, checkout and setup command, public-key login, `whoami`, phone Wi-Fi address, `ssh -t -p 8022 ... zapfast-ssh`, QR pairing from the other machine, single Termux user profile, service startup after reboot, Android battery limits, and optional Tailscale network access using Termux OpenSSH.
-- [ ] **Step 2: Correct the existing SSH guide's stale direct-only description.** Preserve Linux commands and explain browse mode, ten-chat paging, Archived folder, and optional `--to`/`--from` selectors.
-- [ ] **Step 3: Review the documentation and build the Linux SSH target.** Run `cargo check --locked --no-default-features --features ssh --bin zapfast-ssh` and inspect command examples for exact paths and quoting; do not claim Android build success without an attached phone.
-- [ ] **Step 4: Commit and push this branch.**
+- [x] **Step 1: Document phone setup and access.** Cover a supported Termux install, checkout and setup command, public-key login, `whoami`, phone Wi-Fi address, `ssh -t -p 8022 ... zapfast-ssh`, QR pairing from the other machine, single Termux user profile, service startup after reboot, Android battery limits, and optional Tailscale network access using Termux OpenSSH.
+- [x] **Step 2: Correct the existing SSH guide's stale direct-only description.** Preserve Linux commands and explain browse mode, ten-chat paging, Archived folder, and optional `--to`/`--from` selectors.
+- [x] **Step 3: Review the documentation and build the Linux SSH target.** Run `cargo check --locked --no-default-features --features ssh --bin zapfast-ssh` and inspect command examples for exact paths and quoting; do not claim Android build success without an attached phone.
+- [x] **Step 4: Commit and push this branch.**

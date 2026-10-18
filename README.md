@@ -55,7 +55,7 @@ https://github.com/user-attachments/assets/2bf86b54-45fc-4add-8de7-c426c3cdad9b
 | **Your history** | Keep your chats in an encrypted archive on this computer, and fetch older messages from your phone as you scroll. |
 | **Several numbers** | Link more than one WhatsApp number and switch between them in one window. |
 | **Desktop controls** | Use keyboard shortcuts, select and copy text across messages, and stay linked in the tray with notifications. |
-| **SSH terminal** | Run a small headless Rust client on a Linux server through a normal SSH login. Browse chats and history, search, and send or reply to text messages. |
+| **SSH terminal** | Run a small headless Rust client on a Linux server or Android phone with Termux. Browse chats and history, search, and send or reply to text messages. |
 | **Themes** | Choose light, dark, system appearance, or custom colours. On Omarchy, follow your desktop theme. |
 | **Privacy** | Hide locked chats behind a code, or the whole window behind an app lock. Nothing goes to a server of ours. |
 
@@ -86,16 +86,39 @@ details.
 
 ## Use ZapFast over SSH
 
-`zapfast-ssh` is a small headless text client for a Linux server. Choose a
-WhatsApp conversation to send to and one to receive from; it loads and searches
-only the selected receive chat. It supports direct chats and groups, and stays
-connected only while you are logged in. It does not include the desktop window,
-media, calls, or a background service.
+`zapfast-ssh` is a small headless text client for a Linux server or an Android
+phone running Termux. The host's SSH service accepts connections; ZapFast
+connects to WhatsApp only while your SSH terminal is open. By default it loads
+ten active chats, loads more as you scroll, and loads archived chat pages when
+you open Archived. You can also select one send and receive chat with `--to`
+and `--from`. It supports direct chats and groups, without a desktop window,
+media, or calls.
 
-Build and install it **on the Linux server** from a ZapFast checkout:
+To make the **phone** the SSH host, run this inside Termux:
 
 ```sh
-cargo build --release --no-default-features --features ssh --bin zapfast-ssh
+pkg install git
+git clone --branch feat/ssh-client https://github.com/dumbly-smart/zapfast.git
+cd zapfast
+./packaging/termux/setup.sh
+```
+
+Add your computer's SSH public key to Termux's `~/.ssh/authorized_keys`, then
+connect from that computer on the same Wi-Fi network. Replace `TERMUX_USER`
+with Termux's `whoami` output and `PHONE_WIFI_IP` with the phone's Wi-Fi IP:
+
+```sh
+ssh -t -p 8022 TERMUX_USER@PHONE_WIFI_IP zapfast-ssh
+```
+
+The phone's OpenSSH service stays in the background; the WhatsApp session ends
+when you leave the TUI. [The SSH guide](docs/ssh.md) covers SSH keys, pairing,
+auto-start after reboot, and optional access over a private network.
+
+To use a **Linux server** instead, build and install from a ZapFast checkout:
+
+```sh
+cargo build --release --locked --no-default-features --features ssh --bin zapfast-ssh
 install -Dm755 target/release/zapfast-ssh "$HOME/.local/bin/zapfast-ssh"
 ```
 
@@ -103,14 +126,14 @@ Make sure `$HOME/.local/bin` is in that account's `PATH`, then connect from
 your computer with a terminal allocated:
 
 ```sh
-ssh -t your-user@your-server zapfast-ssh --to +14155550123 --from +14155550123
+ssh -t your-user@your-server zapfast-ssh
 ```
 
-Selectors may be an international phone number, WhatsApp JID, or exact
-contact/group name saved in the SSH profile. On a new profile, use numbers or
-JIDs until WhatsApp syncs the local names. To send to one group while reading
-another chat, quote the complete remote command so the names stay single
-arguments:
+Optional `--to` and `--from` selectors may be an international phone number,
+WhatsApp JID, or exact contact/group name saved in the SSH profile. On a new
+profile, use numbers or JIDs until WhatsApp syncs the local names. To send to
+one group while reading another chat, quote the complete remote command so
+the names stay single arguments:
 
 ```sh
 ssh -t your-user@your-server 'zapfast-ssh --to "Design Team" --from "Family"'
@@ -122,17 +145,18 @@ WhatsApp on your phone: **Settings → Linked devices → Link a device**. If th
 terminal is too small to display the code, enlarge it; the QR display redraws
 when the terminal resizes.
 
-Use **j/k** or **↑/↓** to move through the transcript, **/** to search only the
-`--from` chat, **i** to compose, and **Enter** to send to `--to`. **Page Up**
-loads older local history, then explicitly requests older WhatsApp history for
-`--from`. **r** replies when `--to` and `--from` are the same chat; **q** quits.
-Older history depends on what WhatsApp provides to linked devices.
+In browse mode, use **j/k** or **↑/↓** to move through chats, **Enter** to
+open one, and **a** to switch between Chats and Archived. In an open chat,
+**/** searches it, **i** composes, **Enter** sends, and **Page Up** loads older
+local history before requesting older WhatsApp history. **r** replies when
+sending to the same chat; **q** quits. Older history depends on what WhatsApp
+provides to linked devices.
 
-Each Unix login has a private profile on the server containing its WhatsApp
-session and encrypted local archive. Only one session per Unix user can run at
-a time. Keep the passphrase safe; it is never accepted as a command-line
-argument or environment variable. For requirements, storage details, and
-troubleshooting, see the [SSH client guide](docs/ssh.md).
+Each host Unix user has a private profile containing its WhatsApp session and
+encrypted local archive; an unrooted Termux installation has one such user.
+Only one ZapFast session per Unix user can run at a time. Keep the passphrase
+safe; it is never accepted as a command-line argument or environment variable.
+For storage details and troubleshooting, see the [SSH client guide](docs/ssh.md).
 
 ## Guides and help
 
