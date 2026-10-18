@@ -98,8 +98,12 @@ To make the **phone** the SSH host, run this inside Termux:
 
 ```sh
 pkg install git
-git clone --branch feat/ssh-client https://github.com/dumbly-smart/zapfast.git
+git clone https://github.com/dumbly-smart/zapfast.git
 cd zapfast
+if [ ! -f packaging/termux/setup.sh ]; then
+  git fetch origin feat/ssh-client
+  git switch -c feat/ssh-client FETCH_HEAD
+fi
 ./packaging/termux/setup.sh
 ```
 
