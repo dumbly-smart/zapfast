@@ -21,8 +21,8 @@ const FILE_LEN: usize = HEADER_LEN + KEY_LEN + TAG_LEN;
 const MEMORY_KIB: u32 = 64 * 1024;
 const ITERATIONS: u32 = 3;
 
-/// Opens a passphrase vault or creates a random archive key and stores it
-/// atomically. It never creates or modifies the archive itself.
+/// Opens a passphrase vault or creates a random archive key without replacing
+/// an existing key. It never creates or modifies the archive itself.
 pub struct Vault;
 
 impl Vault {
@@ -98,14 +98,7 @@ impl Vault {
         getrandom::fill(&mut nonce).context("Could not generate archive key nonce")?;
         let bytes = Self::encode(&key, &salt, &nonce, passphrase)?;
 
-        let mut suffix = [0u8; 8];
-        getrandom::fill(&mut suffix).context("Could not generate temporary key name")?;
-        let temp = parent.join(format!(".zapfast-key-{}", u64::from_ne_bytes(suffix)));
-        let result = Self::write_new(path, &temp, &bytes);
-        if result.is_err() {
-            let _ = fs::remove_file(&temp);
-        }
-        result?;
+        Self::write_new(path, &bytes)?;
         let verified = Self::open_existing(path, passphrase)
             .context("Could not verify newly written archive key")?;
         ensure!(
@@ -115,22 +108,25 @@ impl Vault {
         Ok(verified)
     }
 
-    fn write_new(path: &Path, temp: &Path, bytes: &[u8; FILE_LEN]) -> Result<()> {
+    fn write_new(path: &Path, bytes: &[u8; FILE_LEN]) -> Result<()> {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .mode(0o600)
             .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(temp)
-            .context("Could not create temporary archive key")?;
-        file.write_all(bytes)
-            .context("Could not write archive key")?;
-        file.sync_all().context("Could not sync archive key")?;
+            .open(path)
+            .context("Could not create archive key")?;
+        let result = (|| {
+            file.write_all(bytes)
+                .context("Could not write archive key")?;
+            file.sync_all().context("Could not sync archive key")?;
+            Ok(())
+        })();
         drop(file);
-        // A hard link makes publication atomic and fails rather than replacing
-        // a key created by another process.
-        fs::hard_link(temp, path).context("Could not publish archive key")?;
-        fs::remove_file(temp).context("Could not remove temporary archive key")?;
+        if let Err(error) = result {
+            let _ = fs::remove_file(path);
+            return Err(error);
+        }
         let parent = path.parent().context("Archive key path has no parent")?;
         File::open(parent)?
             .sync_all()
