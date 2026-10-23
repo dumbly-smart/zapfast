@@ -13,15 +13,15 @@ use super::{
     state::SshState,
 };
 
-const BACKGROUND: Color = Color::Rgb(13, 20, 29);
-const PANEL: Color = Color::Rgb(22, 32, 44);
-const SELECTED: Color = Color::Rgb(35, 65, 69);
-const TEXT: Color = Color::Rgb(230, 237, 241);
-const MUTED: Color = Color::Rgb(145, 161, 174);
-const ACCENT: Color = Color::Rgb(102, 224, 195);
-const OUTGOING: Color = Color::Rgb(137, 187, 255);
-const WARNING: Color = Color::Rgb(255, 202, 122);
-const ERROR: Color = Color::Rgb(255, 137, 143);
+const BACKGROUND: Color = Color::Black;
+const PANEL: Color = Color::Black;
+const SELECTED: Color = Color::White;
+const TEXT: Color = Color::White;
+const MUTED: Color = Color::White;
+const ACCENT: Color = Color::White;
+const OUTGOING: Color = Color::White;
+const WARNING: Color = Color::White;
+const ERROR: Color = Color::White;
 
 pub fn draw(frame: &mut Frame, state: &SshState) {
     let area = frame.area();
@@ -436,7 +436,13 @@ fn message_line(
     } else {
         1
     };
-    let fg = if heading { accent } else { TEXT };
+    let fg = if selected {
+        BACKGROUND
+    } else if heading {
+        accent
+    } else {
+        TEXT
+    };
     let bg = if selected { SELECTED } else { BACKGROUND };
     let style = Style::default().fg(fg).bg(bg);
     Line::from(vec![
