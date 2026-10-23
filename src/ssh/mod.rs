@@ -114,8 +114,14 @@ pub fn run(
         .transpose()?;
     // The archive is already open here. Draw a known-safe cached page before
     // the backend opens its session store and connects to WhatsApp.
-    let initial_chats = if selectors.is_none() && archive.meta("ssh_archive_state_v1")?.is_some() {
-        Some(archive.chats_page(false, 0, state::CHAT_PAGE_SIZE)?)
+    let initial_chats = if selectors.is_none() {
+        let snapshot_complete = archive.meta("ssh_archive_state_v1")?.is_some();
+        let chats = if snapshot_complete {
+            archive.chats_page(false, 0, state::CHAT_PAGE_SIZE)?
+        } else {
+            archive.known_chats_page(false, 0, state::CHAT_PAGE_SIZE)?
+        };
+        (snapshot_complete || !chats.is_empty()).then_some(chats)
     } else {
         None
     };

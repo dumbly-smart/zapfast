@@ -280,15 +280,30 @@ async fn run(
             .is_none();
     let mut archive_repair_pending = archive_repair_needed;
     let mut archive_repair_started = false;
-    let mut deferred_chat_page = None;
+    let mut deferred_chat_pages = Vec::new();
     let (repair_tx, mut repair_rx) = tokio_mpsc::unbounded_channel();
     let mut stop = false;
     while !stop {
         tokio::select! {
             command = commands.recv() => match command {
                 Some(Command::Shutdown) | None => stop = true,
-                Some(command @ Command::LoadChats { .. }) if archive_repair_pending => {
-                    deferred_chat_page = Some(command);
+                Some(Command::LoadChats { archived, offset, limit }) if archive_repair_pending => {
+                    match archive.known_chats_page(archived, offset, limit) {
+                        Ok(chats) if !chats.is_empty() || offset != 0 => emit(
+                            &events,
+                            &wake,
+                            Event::Chats { archived, offset, chats },
+                        ),
+                        Ok(_) => {}
+                        Err(error) => emit(
+                            &events,
+                            &wake,
+                            Event::Link(LinkStatus::Error(error.to_string())),
+                        ),
+                    }
+                    if !deferred_chat_pages.contains(&(archived, offset, limit)) {
+                        deferred_chat_pages.push((archived, offset, limit));
+                    }
                 }
                 Some(command) => process_command(command, &filter, &archive, &client, &events, &wake).await,
             },
@@ -312,6 +327,28 @@ async fn run(
                         });
                     }
                     process_wa_event(&event, &filter, &archive, &events, &wake);
+                    if archive_repair_pending
+                        && matches!(
+                            &*event,
+                            WaEvent::ArchiveUpdate(_) | WaEvent::HistorySync(_)
+                        )
+                    {
+                        for &(archived, offset, limit) in &deferred_chat_pages {
+                            match archive.known_chats_page(archived, offset, limit) {
+                                Ok(chats) if !chats.is_empty() || offset != 0 => emit(
+                                    &events,
+                                    &wake,
+                                    Event::Chats { archived, offset, chats },
+                                ),
+                                Ok(_) => {}
+                                Err(error) => emit(
+                                    &events,
+                                    &wake,
+                                    Event::Link(LinkStatus::Error(error.to_string())),
+                                ),
+                            }
+                        }
+                    }
                 }
                 Err(_) => stop = true,
             },
@@ -327,8 +364,16 @@ async fn run(
                             emit(&events, &wake, Event::Link(LinkStatus::Error(error.to_string())));
                         }
                         archive_repair_pending = false;
-                        if let Some(command) = deferred_chat_page.take() {
-                            process_command(command, &filter, &archive, &client, &events, &wake).await;
+                        for (archived, offset, limit) in deferred_chat_pages.drain(..) {
+                            process_command(
+                                Command::LoadChats { archived, offset, limit },
+                                &filter,
+                                &archive,
+                                &client,
+                                &events,
+                                &wake,
+                            )
+                            .await;
                         }
                     }
                     Some(Ok(report)) => {

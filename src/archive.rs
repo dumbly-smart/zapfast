@@ -440,6 +440,10 @@ impl Archive {
                 ))?;
             }
         }
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS chats_by_archive_activity
+             ON chats (archived, last_activity DESC, id)",
+        )?;
         favorites::adopt_local_marks(&connection)?;
         Self::prune_receipts(&connection)?;
         Ok(Self { connection })
@@ -599,11 +603,12 @@ impl Archive {
         self.set_archived_at(id, archived, jiff::Timestamp::now().as_millisecond())
     }
 
-    /// History has no archive-state timestamp, so it cannot replace a newer
-    /// app-state update from the phone.
+    /// History has no archive-state timestamp. Zero marks a known snapshot
+    /// state while allowing a later timestamped phone update to replace it.
     pub fn set_archived_snapshot(&self, id: &str, archived: bool) -> Result<()> {
         self.connection.execute(
-            "UPDATE chats SET archived = ?2 WHERE id = ?1 AND archive_updated_at IS NULL",
+            "UPDATE chats SET archived = ?2, archive_updated_at = 0 WHERE id = ?1
+                AND (archive_updated_at IS NULL OR archive_updated_at = 0)",
             params![id, archived],
         )?;
         Ok(())
@@ -894,6 +899,26 @@ impl Archive {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {CHAT_COLUMNS} {CHAT_JOIN}
              WHERE c.archived = ?1
+             ORDER BY c.last_activity DESC, c.id ASC LIMIT ?2 OFFSET ?3"
+        ))?;
+        let rows = statement.query_map(
+            params![archived, limit as i64, offset as i64],
+            chat_from_row,
+        )?;
+        rows.collect()
+    }
+
+    /// Returns a page containing only chats with a locally known archive
+    /// state. SSH uses this while the first complete folder snapshot syncs.
+    pub fn known_chats_page(
+        &self,
+        archived: bool,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<Chat>> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {CHAT_COLUMNS} {CHAT_JOIN}
+             WHERE c.archived = ?1 AND c.archive_updated_at IS NOT NULL
              ORDER BY c.last_activity DESC, c.id ASC LIMIT ?2 OFFSET ?3"
         ))?;
         let rows = statement.query_map(
